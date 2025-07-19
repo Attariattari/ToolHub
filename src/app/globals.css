@@ -1,0 +1,352 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+      "Helvetica Neue", sans-serif;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 84% 60%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 84% 60%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  /* .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  } */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Geist", sans-serif;
+  }
+}
+
+/* Custom dropdown animations */
+.dropdown-enter {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.dropdown-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms, transform 300ms;
+}
+
+.dropdown-exit {
+  opacity: 1;
+}
+
+.dropdown-exit-active {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 300ms, transform 300ms;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary));
+  border-radius: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+/* Blog Content Styling */
+.blog-content {
+  @apply text-gray-700 leading-relaxed;
+}
+
+.blog-content h2 {
+  @apply text-2xl font-bold text-gray-900 mt-8 mb-4 border-b border-gray-200 pb-2;
+}
+
+.blog-content h3 {
+  @apply text-xl font-semibold text-gray-900 mt-6 mb-3;
+}
+
+.blog-content p {
+  @apply mb-4 leading-relaxed;
+}
+
+.blog-content ul,
+.blog-content ol {
+  @apply mb-4 pl-6;
+}
+
+.blog-content li {
+  @apply mb-2;
+}
+
+.blog-content ul li {
+  @apply list-disc;
+}
+
+.blog-content ol li {
+  @apply list-decimal;
+}
+
+.blog-content strong {
+  @apply font-semibold text-gray-900;
+}
+
+.blog-content a {
+  @apply text-red-600 hover:text-red-700 underline;
+}
+
+.blog-content blockquote {
+  @apply border-l-4 border-red-500 pl-4 italic text-gray-600 my-4;
+}
+
+.blog-content code {
+  @apply bg-gray-100 px-2 py-1 rounded text-sm font-mono;
+}
+
+.blog-content pre {
+  @apply bg-gray-100 p-4 rounded-lg overflow-x-auto my-4;
+}
+
+.blog-content img {
+  @apply rounded-lg shadow-sm my-6;
+}
+
+/* @tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --primary: 222 47% 11%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222 47% 11%;
+
+    --accent: 262 83% 58%;
+    --accent-foreground: 210 40% 98%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --gradient-start: 262 83% 58%;
+    --gradient-end: 222 47% 11%;
+  }
+
+  .dark {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 262 83% 58%;
+    --accent-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+
+    --gradient-start: 262 83% 58%;
+    --gradient-end: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-bold tracking-tight;
+  }
+
+  h1 {
+    @apply text-4xl md:text-5xl lg:text-6xl;
+  }
+
+  h2 {
+    @apply text-3xl md:text-4xl;
+  }
+
+  h3 {
+    @apply text-2xl md:text-3xl;
+  }
+
+  section {
+    @apply py-16 md:py-24;
+  }
+}
+
+@layer components {
+  .container-custom {
+    @apply container mx-auto px-4 md:px-6 max-w-7xl;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-accent to-primary bg-clip-text text-transparent;
+  }
+
+  .gradient-border {
+    @apply relative before:absolute before:inset-0 before:p-[2px] before:rounded-lg before:bg-gradient-to-r before:from-[hsl(var(--gradient-start))] before:to-[hsl(var(--gradient-end))] before:-z-10 before:content-[''];
+  }
+
+  .custom-scrollbar {
+    @apply scrollbar-thin scrollbar-thumb-accent scrollbar-track-transparent;
+  }
+} */
+/* 🔵 Font size input arrows styling */
+/* Chrome, Safari, Edge */
+.input-no-hover-arrows::-webkit-inner-spin-button {
+  appearance: none;
+  background-color: rgb(134, 132, 132); /* ✅ Background white */
+  color: black; /* ✅ Arrow color black */
+  opacity: 1 !important;
+  width: 16px;
+  height: 16px;
+}
+
+.input-no-hover-arrows::-webkit-inner-spin-button:hover {
+  background-color: rgb(94, 87, 87);
+  color: black;
+}
+
+.input-no-hover-arrows::-webkit-outer-spin-button {
+  appearance: none;
+}
+
+/* Firefox */
+.input-no-hover-arrows {
+  -moz-appearance: textfield;
+}
+/* === Always show number input spinner, with white bg and black arrow text === */
+input[type="number"].custom-number::-webkit-inner-spin-button,
+input[type="number"].custom-number::-webkit-outer-spin-button {
+  opacity: 1 !important;
+  background: white !important;
+  color: black !important;
+  appearance: auto !important;
+  border: none !important;
+}
+
+/* Remove spinner suppression in Firefox */
+input[type="number"].custom-number {
+  -moz-appearance: textfield;
+}
