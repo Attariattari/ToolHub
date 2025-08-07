@@ -130,8 +130,15 @@
   display: none;
 }
 
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--primary)) transparent;
+}
+
+/* WebKit-based browsers (Chrome, Edge, Safari) */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
+  width: 5px; /* For vertical */
+  height: 5px; /* For horizontal */
   background: transparent;
 }
 
