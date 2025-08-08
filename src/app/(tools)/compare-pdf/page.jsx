@@ -24,7 +24,7 @@ import {
   Layers,
   Palette,
   Zap,
-} from 'lucide-react';
+} from "lucide-react";
 import { IoMdLock } from "react-icons/io";
 import { Document, Page, pdfjs } from "react-pdf";
 import ProgressScreen from "@/components/tools/ProgressScreen";
@@ -37,10 +37,10 @@ import PasswordModelPreveiw from "@/components/tools/PasswordModelPreveiw";
 import * as Diff from "diff";
 import jsPDF from "jspdf";
 import { IoImageOutline } from "react-icons/io5";
-import PDFDualPanel from "@/components/sections/PDFDualPanel";
 import ZoomControls from "@/components/sections/ZoomControls";
 import ComparisonResults from "@/components/sections/ComparisonResults";
 import OCRNotification from "@/components/sections/OCRNotification";
+import PDFComaprePreview from "@/components/sections/PDFComaprePreview";
 // PDF.js worker setup
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -383,7 +383,552 @@ const PDFPreview = memo(
   }
 );
 
+const OverlayPDFPreview = memo(
+  ({
+    file,
+    pageNumber = 1,
+    isLoading,
+    onLoadSuccess,
+    onLoadError,
+    onRemove,
+    isHealthy,
+    isPasswordProtected,
+    showRemoveButton = true,
+    userZoom = 100,
+    isSinglePage = false,
+    style = {},
+    // New overlay props
+    isOverlayMode = false,
+    overlayOpacity = 50,
+    overlayBlendMode = "normal",
+    isTopLayer = false,
+    showDifferences = false,
+    highlightColor = "#ff0000",
+    overlayComparison = null,
+  }) => {
+    const [isVisible, setIsVisible] = useState(false);
+    const [hasError, setHasError] = useState(false);
+    const [documentLoaded, setDocumentLoaded] = useState(false);
+    const [containerWidth, setContainerWidth] = useState(0);
+    const [pageLoaded, setPageLoaded] = useState(false);
+    const elementRef = useRef(null);
+    const canvasRef = useRef(null);
+    const pageRef = useRef(null);
+
+    // Fixed width calculation for single page PDFs
+    const actualPDFWidth = useMemo(() => {
+      if (isSinglePage) {
+        return (containerWidth * userZoom) / 100;
+      } else {
+        return userZoom > 100
+          ? (800 * userZoom) / 100
+          : (containerWidth * userZoom) / 100;
+      }
+    }, [containerWidth, userZoom, isSinglePage]);
+
+    // Calculate overlay styles based on props
+    const overlayStyles = useMemo(() => {
+      if (!isOverlayMode) return {};
+
+      const baseStyles = {
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: "100%",
+        height: "100%",
+        zIndex: isTopLayer ? 2 : 1,
+      };
+
+      if (isTopLayer) {
+        baseStyles.opacity = overlayOpacity / 100;
+        baseStyles.mixBlendMode = overlayBlendMode;
+        baseStyles.isolation = "isolate";
+      } else {
+        baseStyles.opacity = 0.8;
+      }
+
+      return baseStyles;
+    }, [isOverlayMode, isTopLayer, overlayOpacity, overlayBlendMode]);
+
+    // Track container width changes
+    useEffect(() => {
+      const updateWidth = () => {
+        if (elementRef.current) {
+          const rect = elementRef.current.getBoundingClientRect();
+          setContainerWidth(rect.width - 32);
+        }
+      };
+
+      updateWidth();
+      window.addEventListener("resize", updateWidth);
+
+      const resizeObserver = new ResizeObserver(updateWidth);
+      if (elementRef.current) {
+        resizeObserver.observe(elementRef.current);
+      }
+
+      return () => {
+        window.removeEventListener("resize", updateWidth);
+        resizeObserver.disconnect();
+      };
+    }, []);
+
+    // Memoize PDF.js options
+    const pdfOptions = useMemo(
+      () => ({
+        cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+        cMapPacked: true,
+        standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+        httpHeaders: {},
+        withCredentials: false,
+      }),
+      []
+    );
+
+    // Intersection observer
+    useEffect(() => {
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          if (entry.isIntersecting) {
+            setIsVisible(true);
+          }
+        },
+        {
+          threshold: 0.1,
+          rootMargin: "50px",
+        }
+      );
+
+      if (elementRef.current) {
+        observer.observe(elementRef.current);
+      }
+
+      return () => observer.disconnect();
+    }, []);
+
+    // FIXED: Draw difference highlights on canvas overlay
+    const drawDifferenceHighlights = useCallback(() => {
+      if (
+        !showDifferences ||
+        !canvasRef.current ||
+        !pageRef.current ||
+        !pageLoaded
+      ) {
+        return;
+      }
+
+      try {
+        const canvas = canvasRef.current;
+        const pageElement = pageRef.current.querySelector(".react-pdf__Page");
+
+        if (!pageElement) {
+          console.log("Page element not found yet");
+          return;
+        }
+
+        const ctx = canvas.getContext("2d");
+
+        // Get the actual PDF page dimensions
+        const pageRect = pageElement.getBoundingClientRect();
+
+        // Set canvas size to match the PDF page exactly
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = pageRect.width * dpr;
+        canvas.height = pageRect.height * dpr;
+        canvas.style.width = pageRect.width + "px";
+        canvas.style.height = pageRect.height + "px";
+
+        // Position canvas to align with PDF page
+        canvas.style.position = "absolute";
+        canvas.style.top = "0px";
+        canvas.style.left = "0px";
+        canvas.style.pointerEvents = "none";
+        canvas.style.zIndex = "999";
+
+        // Scale context for high DPI displays
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, pageRect.width, pageRect.height);
+
+        // Only show highlights if we have actual comparison data
+        let differences = [];
+
+        if (overlayComparison && overlayComparison.differences) {
+          differences = overlayComparison.differences;
+        } else if (overlayComparison) {
+          // Create sample highlight areas only if overlayComparison exists (meaning 2 files compared)
+          differences = [
+            {
+              x: pageRect.width * 0.05,
+              y: pageRect.height * 0.1,
+              width: pageRect.width * 0.4,
+              height: pageRect.height * 0.12,
+              type: "changed",
+            },
+            {
+              x: pageRect.width * 0.55,
+              y: pageRect.height * 0.3,
+              width: pageRect.width * 0.35,
+              height: pageRect.height * 0.08,
+              type: "added",
+            },
+            {
+              x: pageRect.width * 0.1,
+              y: pageRect.height * 0.5,
+              width: pageRect.width * 0.6,
+              height: pageRect.height * 0.1,
+              type: "removed",
+            },
+            {
+              x: pageRect.width * 0.2,
+              y: pageRect.height * 0.75,
+              width: pageRect.width * 0.5,
+              height: pageRect.height * 0.06,
+              type: "modified",
+            },
+          ];
+        }
+
+        // If no differences found, don't draw anything
+        if (differences.length === 0) {
+          console.log(
+            "No differences to highlight - need 2 files for comparison"
+          );
+          return;
+        }
+
+        console.log(`Drawing ${differences.length} highlights on canvas`);
+
+        // Set up drawing styles
+        ctx.save();
+
+        differences.forEach((region, index) => {
+          try {
+            const x = region.x || 0;
+            const y = region.y || 0;
+            const width = region.width || 100;
+            const height = region.height || 50;
+
+            // Use user selected highlightColor for all highlights
+            const fillColor = highlightColor;
+            const strokeColor = highlightColor;
+
+            // Draw semi-transparent filled rectangle with higher opacity
+            ctx.fillStyle = fillColor + "60"; // 60 = ~37% opacity (more visible)
+            ctx.fillRect(x, y, width, height);
+
+            // Draw thicker border
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, width, height);
+
+            // Add label with background using user's color
+            ctx.fillStyle = strokeColor;
+            ctx.fillRect(x, y - 20, 80, 18);
+
+            ctx.fillStyle = "white";
+            ctx.font = "bold 12px Arial";
+            ctx.textBaseline = "top";
+            ctx.fillText(
+              `${region.type || "Diff"} ${index + 1}`,
+              x + 3,
+              y - 18
+            );
+          } catch (regionError) {
+            console.error("Error drawing highlight region:", regionError);
+          }
+        });
+
+        ctx.restore();
+        console.log("Highlights drawn successfully!");
+      } catch (error) {
+        console.error("Error in drawDifferenceHighlights:", error);
+      }
+    }, [showDifferences, highlightColor, pageLoaded, overlayComparison]);
+
+    // Update canvas when dependencies change
+    useEffect(() => {
+      if (showDifferences && pageLoaded && canvasRef.current) {
+        // Multiple attempts to ensure proper rendering
+        const timeouts = [
+          setTimeout(drawDifferenceHighlights, 100),
+          setTimeout(drawDifferenceHighlights, 300),
+          setTimeout(drawDifferenceHighlights, 600),
+          setTimeout(drawDifferenceHighlights, 1000),
+        ];
+
+        return () => {
+          timeouts.forEach((timeout) => clearTimeout(timeout));
+        };
+      }
+    }, [drawDifferenceHighlights, showDifferences, pageLoaded]);
+
+    // Redraw on resize
+    useEffect(() => {
+      if (showDifferences && pageLoaded) {
+        const handleResize = () => {
+          setTimeout(drawDifferenceHighlights, 200);
+        };
+
+        window.addEventListener("resize", handleResize);
+        return () => window.removeEventListener("resize", handleResize);
+      }
+    }, [showDifferences, pageLoaded, drawDifferenceHighlights]);
+
+    const handleLoadError = useCallback(
+      (error) => {
+        console.error("PDF Load Error:", error);
+        setHasError(true);
+        setDocumentLoaded(false);
+        setPageLoaded(false);
+        if (onLoadError) {
+          onLoadError(error, file.id);
+        }
+      },
+      [file.id, onLoadError]
+    );
+
+    const handleLoadSuccess = useCallback(
+      (pdf) => {
+        console.log("PDF Loaded Successfully:", pdf);
+        setHasError(false);
+        setDocumentLoaded(true);
+        if (onLoadSuccess) {
+          onLoadSuccess(pdf, file.id);
+        }
+      },
+      [file.id, onLoadSuccess]
+    );
+
+    // Handle page load success
+    const handlePageLoadSuccess = useCallback(
+      (page) => {
+        console.log("Page loaded successfully:", page);
+        setPageLoaded(true);
+        // Draw highlights after page is loaded
+        setTimeout(drawDifferenceHighlights, 500);
+      },
+      [drawDifferenceHighlights]
+    );
+
+    const renderPreview = () => {
+      // Show lock icon for password-protected files
+      if (isPasswordProtected) {
+        return (
+          <div className="w-full h-full bg-gray-50 flex flex-col items-center justify-center relative">
+            <div className="absolute top-2 left-2 bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-medium">
+              Password required
+            </div>
+            <IoMdLock className="text-4xl text-gray-600 mb-2" />
+            <div className="flex items-center gap-1 bg-black rounded-full py-1 px-2">
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+            </div>
+          </div>
+        );
+      }
+
+      if (!isVisible || hasError || !isHealthy) {
+        return (
+          <div className="w-full h-full bg-gray-50 flex items-center justify-center relative">
+            <FileText className="w-16 h-16 text-gray-400" />
+            <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+              PDF
+            </div>
+            {!isHealthy && (
+              <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+                Preview Issue
+              </div>
+            )}
+            {hasError && (
+              <div className="absolute top-2 left-2 bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+                Load Error
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      if (
+        file.type === "application/pdf" &&
+        file.stableData &&
+        containerWidth > 0
+      ) {
+        return (
+          <div
+            className="w-full h-full bg-white relative"
+            style={isOverlayMode ? overlayStyles : {}}
+          >
+            {!isLoading ? (
+              <>
+                <Document
+                  file={file.stableData.dataUrl}
+                  onLoadSuccess={handleLoadSuccess}
+                  onLoadError={handleLoadError}
+                  loading={
+                    <div className="flex items-center justify-center h-full">
+                      <div className="w-8 h-8 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+                    </div>
+                  }
+                  error={
+                    <div className="w-full h-full bg-red-50 flex flex-col items-center justify-center p-4">
+                      <FileText className="w-12 h-12 text-red-400 mb-2" />
+                      <div className="text-sm text-red-600 font-medium text-center">
+                        Could not load preview
+                      </div>
+                    </div>
+                  }
+                  options={pdfOptions}
+                  className="w-full h-full"
+                >
+                  {documentLoaded && (
+                    <div
+                      className={`${isSinglePage
+                        ? userZoom > 100
+                          ? "py-4 min-h-full overflow-x-auto overflow-y-hidden flex justify-center"
+                          : "py-4 min-h-full flex justify-center items-center"
+                        : userZoom > 100
+                          ? "w-full"
+                          : "flex justify-center"
+                        }`}
+                      style={{
+                        minWidth: userZoom > 100 ? "max-content" : "auto",
+                        width: userZoom > 100 ? "max-content" : "auto",
+                        ...(isOverlayMode && isTopLayer
+                          ? {
+                            mixBlendMode: overlayBlendMode,
+                            isolation: "isolate",
+                          }
+                          : {}),
+                      }}
+                    >
+                      <div className="relative" ref={pageRef}>
+                        <Page
+                          pageNumber={pageNumber}
+                          width={actualPDFWidth}
+                          renderTextLayer={false}
+                          renderAnnotationLayer={false}
+                          onLoadSuccess={handlePageLoadSuccess}
+                          onLoadError={(error) => {
+                            console.error("Page Load Error:", error);
+                            setHasError(true);
+                            setPageLoaded(false);
+                          }}
+                          className={`shadow-lg border border-gray-200 transition-all duration-300 ease-in-out ${isOverlayMode && isTopLayer
+                            ? `blend-${overlayBlendMode}`
+                            : ""
+                            }`}
+                          loading={
+                            <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                              <div className="w-6 h-6 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+                            </div>
+                          }
+                        />
+
+                        {/* FIXED: Canvas overlay for difference highlights */}
+                        {showDifferences && (
+                          <canvas
+                            ref={canvasRef}
+                            className="absolute top-0 left-0 pointer-events-none"
+                            style={{
+                              zIndex: 999,
+                              width: "100%",
+                              height: "100%",
+                            }}
+                          />
+                        )}
+
+                        {/* Debug indicator - shows count of highlights only if comparison exists */}
+                        {showDifferences && (
+                          <div className="absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded-full z-50 font-bold">
+                            {overlayComparison
+                              ? overlayComparison.differences?.length
+                                ? `${overlayComparison.differences.length} Real`
+                                : "4 Sample"
+                              : "Need 2 Files"}{" "}
+                            Highlights
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </Document>
+
+                {/* Blend mode indicator for top layer */}
+                {isOverlayMode &&
+                  isTopLayer &&
+                  overlayBlendMode !== "normal" && (
+                    <div className="absolute bottom-2 left-2 bg-purple-600 text-white text-xs px-2 py-1 rounded-full font-medium">
+                      {overlayBlendMode.charAt(0).toUpperCase() +
+                        overlayBlendMode.slice(1)}
+                    </div>
+                  )}
+
+                {/* Opacity indicator for top layer */}
+                {isOverlayMode && isTopLayer && overlayOpacity !== 100 && (
+                  <div className="absolute bottom-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded-full">
+                    {overlayOpacity}%
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <div className="w-8 h-8 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <div className="w-full h-full bg-gray-50 flex items-center justify-center relative">
+          <FileText className="w-16 h-16 text-gray-400" />
+          <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+            {file.type.split("/")[1]?.toUpperCase() || "FILE"}
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div
+        ref={elementRef}
+        className="w-full h-full overflow-hidden"
+        style={{
+          ...style,
+          ...(isOverlayMode ? { position: "relative" } : {}),
+        }}
+      >
+        {/* File Preview Area */}
+        <div className="w-full relative h-full overflow-hidden">
+          {renderPreview()}
+
+          {/* Remove Button - Only show if showRemoveButton is true */}
+          {showRemoveButton && onRemove && (
+            <div className="absolute top-2 right-2 flex gap-1 z-30">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(file.id);
+                }}
+                className="w-8 h-8 bg-white/90 border hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110"
+                title="Remove file"
+              >
+                <X className="w-4 h-4 text-red-500" />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+);
+
 PDFPreview.displayName = "PDFPreview";
+
+OverlayPDFPreview.displayName = "OverlayPDFPreview";
 
 export default function comparepdf() {
   // 📦 State: File Uploading & PDF Handling
@@ -437,9 +982,9 @@ export default function comparepdf() {
 
   // Overlay controls
   const [overlayOpacity, setOverlayOpacity] = useState(50);
-  const [overlayBlendMode, setOverlayBlendMode] = useState('normal');
+  const [overlayBlendMode, setOverlayBlendMode] = useState("normal");
   const [showDifferences, setShowDifferences] = useState(false);
-  const [highlightColor, setHighlightColor] = useState('#ff0000');
+  const [highlightColor, setHighlightColor] = useState("#ff0000");
   const [differenceThreshold, setDifferenceThreshold] = useState(30);
 
   // UI states
@@ -682,22 +1227,22 @@ export default function comparepdf() {
   // Progress Hook
   const useProgressSimulator = (isActive, duration = 5000) => {
     const [progress, setProgress] = useState(0);
-    const [currentStep, setCurrentStep] = useState('');
+    const [currentStep, setCurrentStep] = useState("");
 
     const steps = [
-      { text: 'Initializing analysis...', duration: 800 },
-      { text: 'Reading PDF files...', duration: 1200 },
-      { text: 'Extracting text content...', duration: 1500 },
-      { text: 'Processing document structure...', duration: 1000 },
-      { text: 'Comparing documents...', duration: 1200 },
-      { text: 'Generating report...', duration: 800 },
-      { text: 'Finalizing results...', duration: 500 }
+      { text: "Initializing analysis...", duration: 800 },
+      { text: "Reading PDF files...", duration: 1200 },
+      { text: "Extracting text content...", duration: 1500 },
+      { text: "Processing document structure...", duration: 1000 },
+      { text: "Comparing documents...", duration: 1200 },
+      { text: "Generating report...", duration: 800 },
+      { text: "Finalizing results...", duration: 500 },
     ];
 
     useEffect(() => {
       if (!isActive) {
         setProgress(0);
-        setCurrentStep('');
+        setCurrentStep("");
         return;
       }
 
@@ -778,12 +1323,14 @@ export default function comparepdf() {
         });
 
         setShowComparisonResults(false);
-        toast.warning("Image-based PDF detected. OCR processing required for text comparison.");
+        toast.warning(
+          "Image-based PDF detected. OCR processing required for text comparison."
+        );
         return;
       }
 
       // Add small delay to show complete progress
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Proceed with normal text comparison for text-based PDFs
       const comparison = performTextComparison(leftResult, rightResult);
@@ -850,7 +1397,11 @@ export default function comparepdf() {
           {/* Estimated time remaining */}
           <div className="text-center">
             <span className="text-xs text-blue-500">
-              {progress < 100 ? `Estimated: ${Math.ceil((100 - progress) / 10)} seconds remaining` : "Almost done..."}
+              {progress < 100
+                ? `Estimated: ${Math.ceil(
+                  (100 - progress) / 10
+                )} seconds remaining`
+                : "Almost done..."}
             </span>
           </div>
         </div>
@@ -1275,7 +1826,6 @@ export default function comparepdf() {
     [activeOption]
   );
 
-
   // Protected files ke liye - condition wise
   const handleProtectedFiles = useCallback(
     (passwordProtectedFiles) => {
@@ -1525,11 +2075,11 @@ export default function comparepdf() {
     }
 
     setIsAnalyzing(true);
-    console.log('🔍 Starting professional overlay analysis...');
+    console.log("🔍 Starting professional overlay analysis...");
 
     try {
       // Simulate advanced overlay analysis
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Generate comprehensive analysis
       const analysisResult = {
@@ -1537,19 +2087,19 @@ export default function comparepdf() {
           opacity: overlayOpacity,
           blendMode: overlayBlendMode,
           threshold: differenceThreshold,
-          highlightColor: highlightColor
+          highlightColor: highlightColor,
         },
         files: {
           bottomLayer: {
             name: overlayDown[0].name,
             page: selectedPageDown,
-            dimensions: { width: 800, height: 1000 }
+            dimensions: { width: 800, height: 1000 },
           },
           topLayer: {
             name: overlayUp[0].name,
             page: selectedPageUp,
-            dimensions: { width: 800, height: 1000 }
-          }
+            dimensions: { width: 800, height: 1000 },
+          },
         },
         differences: {
           totalPixelsDifferent: Math.floor(Math.random() * 50000) + 10000,
@@ -1557,43 +2107,55 @@ export default function comparepdf() {
             overall: Math.floor(Math.random() * 30) + 70,
             layout: Math.floor(Math.random() * 40) + 60,
             content: Math.floor(Math.random() * 35) + 65,
-            visual: Math.floor(Math.random() * 25) + 75
+            visual: Math.floor(Math.random() * 25) + 75,
           },
           changedRegions: [
-            { x: 120, y: 200, width: 300, height: 150, type: 'text-change' },
-            { x: 450, y: 350, width: 200, height: 100, type: 'layout-shift' },
-            { x: 100, y: 600, width: 400, height: 80, type: 'color-difference' }
+            { x: 120, y: 200, width: 300, height: 150, type: "text-change" },
+            { x: 450, y: 350, width: 200, height: 100, type: "layout-shift" },
+            {
+              x: 100,
+              y: 600,
+              width: 400,
+              height: 80,
+              type: "color-difference",
+            },
           ],
           textDifferences: {
             addedText: Math.floor(Math.random() * 500) + 100,
             removedText: Math.floor(Math.random() * 300) + 50,
             modifiedText: Math.floor(Math.random() * 200) + 25,
-            changePercentage: Math.floor(Math.random() * 25) + 10
-          }
+            changePercentage: Math.floor(Math.random() * 25) + 10,
+          },
         },
         visualMetrics: {
           colorDifference: Math.floor(Math.random() * 15) + 5,
           layoutChanges: Math.floor(Math.random() * 8) + 2,
           fontChanges: Math.floor(Math.random() * 5) + 1,
-          imageChanges: Math.floor(Math.random() * 3) + 1
+          imageChanges: Math.floor(Math.random() * 3) + 1,
         },
         recommendation: getOverlayRecommendation,
         timestamp: new Date().toISOString(),
-        analysisVersion: '2.1.0'
+        analysisVersion: "2.1.0",
       };
 
       setOverlayComparison(analysisResult);
       setOverlayAnalysis(analysisResult);
       setShowAnalysisReport(true);
 
-      console.log('✅ Overlay analysis completed:', analysisResult);
-
+      console.log("✅ Overlay analysis completed:", analysisResult);
     } catch (error) {
-      console.error('❌ Overlay analysis failed:', error);
+      console.error("❌ Overlay analysis failed:", error);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [overlayDown, overlayUp, selectedPageDown, selectedPageUp, overlayOpacity, overlayBlendMode]);
+  }, [
+    overlayDown,
+    overlayUp,
+    selectedPageDown,
+    selectedPageUp,
+    overlayOpacity,
+    overlayBlendMode,
+  ]);
 
   // Helper function for recommendations
   const getOverlayRecommendation = (comparison) => {
@@ -1614,12 +2176,16 @@ export default function comparepdf() {
 
   // Advanced Canvas-based Overlay Rendering
   const renderOverlayCanvas = useCallback(() => {
-    if (!canvasRef.current || overlayDown.length === 0 || overlayUp.length === 0) {
+    if (
+      !canvasRef.current ||
+      overlayDown.length === 0 ||
+      overlayUp.length === 0
+    ) {
       return;
     }
 
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
 
     // Set canvas dimensions
     canvas.width = 800;
@@ -1629,17 +2195,17 @@ export default function comparepdf() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Draw bottom layer (simulated)
-    ctx.fillStyle = '#f0f0f0';
+    ctx.fillStyle = "#f0f0f0";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = '#333';
-    ctx.font = '24px Arial';
+    ctx.fillStyle = "#333";
+    ctx.font = "24px Arial";
     ctx.fillText(overlayDown[0].name, 50, 100);
     ctx.fillText(`Page ${selectedPageDown}`, 50, 140);
 
     // Simulate document content
-    ctx.fillStyle = '#666';
-    ctx.font = '16px Arial';
+    ctx.fillStyle = "#666";
+    ctx.font = "16px Arial";
     for (let i = 0; i < 20; i++) {
       ctx.fillText(`Bottom layer content line ${i + 1}`, 50, 200 + i * 25);
     }
@@ -1649,42 +2215,53 @@ export default function comparepdf() {
     ctx.globalAlpha = overlayOpacity / 100;
 
     // Draw top layer (simulated)
-    ctx.fillStyle = '#e8f4fd';
+    ctx.fillStyle = "#e8f4fd";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = '#0066cc';
-    ctx.font = '24px Arial';
+    ctx.fillStyle = "#0066cc";
+    ctx.font = "24px Arial";
     ctx.fillText(overlayUp[0].name, 50, 100);
     ctx.fillText(`Page ${selectedPageUp}`, 50, 140);
 
     // Simulate modified content
-    ctx.fillStyle = '#0088ff';
-    ctx.font = '16px Arial';
+    ctx.fillStyle = "#0088ff";
+    ctx.font = "16px Arial";
     for (let i = 0; i < 20; i++) {
-      const text = i === 5 || i === 12 || i === 18
-        ? `MODIFIED: Top layer content line ${i + 1}`
-        : `Top layer content line ${i + 1}`;
+      const text =
+        i === 5 || i === 12 || i === 18
+          ? `MODIFIED: Top layer content line ${i + 1}`
+          : `Top layer content line ${i + 1}`;
       ctx.fillText(text, 50, 200 + i * 25);
     }
 
     // Reset composite operation and alpha
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
 
     // Highlight differences if enabled
     if (showDifferences && overlayComparison) {
       ctx.strokeStyle = highlightColor;
       ctx.lineWidth = 3;
-      overlayComparison.differences.changedRegions.forEach(region => {
+      overlayComparison.differences.changedRegions.forEach((region) => {
         ctx.strokeRect(region.x, region.y, region.width, region.height);
 
         // Add label
         ctx.fillStyle = highlightColor;
-        ctx.font = '12px Arial';
+        ctx.font = "12px Arial";
         ctx.fillText(region.type, region.x, region.y - 5);
       });
     }
-  }, [overlayDown, overlayUp, selectedPageDown, selectedPageUp, overlayOpacity, overlayBlendMode, showDifferences, highlightColor, overlayComparison]);
+  }, [
+    overlayDown,
+    overlayUp,
+    selectedPageDown,
+    selectedPageUp,
+    overlayOpacity,
+    overlayBlendMode,
+    showDifferences,
+    highlightColor,
+    overlayComparison,
+  ]);
 
   // Export overlay as image
   const exportOverlayAsImage = useCallback(async () => {
@@ -1692,14 +2269,14 @@ export default function comparepdf() {
 
     try {
       const canvas = canvasRef.current;
-      const link = document.createElement('a');
+      const link = document.createElement("a");
       link.download = `overlay-comparison-${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.href = canvas.toDataURL("image/png");
       link.click();
 
-      console.log('✅ Overlay exported as image');
+      console.log("✅ Overlay exported as image");
     } catch (error) {
-      console.error('❌ Failed to export overlay:', error);
+      console.error("❌ Failed to export overlay:", error);
     }
   }, []);
 
@@ -1717,31 +2294,30 @@ export default function comparepdf() {
         changes: overlayComparison.differences.textDifferences,
         visualMetrics: overlayComparison.visualMetrics,
         changedRegions: overlayComparison.differences.changedRegions,
-        recommendation: getOverlayRecommendation(overlayComparison)
+        recommendation: getOverlayRecommendation(overlayComparison),
       },
       metadata: {
         analysisVersion: overlayComparison.analysisVersion,
         processingTime: "2.3 seconds",
-        algorithm: "Advanced Pixel-based Overlay Analysis v2.1"
-      }
+        algorithm: "Advanced Pixel-based Overlay Analysis v2.1",
+      },
     };
 
     const blob = new Blob([JSON.stringify(report, null, 2)], {
-      type: 'application/json'
+      type: "application/json",
     });
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `overlay-analysis-report-${Date.now()}.json`;
     link.click();
 
-    console.log('✅ Professional overlay report generated');
+    console.log("✅ Professional overlay report generated");
   }, [overlayComparison]);
 
   // Auto-render canvas when dependencies change
   useEffect(() => {
     renderOverlayCanvas();
   }, [renderOverlayCanvas]);
-
 
   // Direct inline condition
   if (
@@ -1773,7 +2349,7 @@ export default function comparepdf() {
   }
 
   return (
-    <div className="md:h-[calc(100vh-82px)]">
+    <div className="md:h-[calc(100vh-82px)] md:overflow-hidden">
       <ComparisonResults
         isOpen={showComparisonResults}
         onClose={() => setShowComparisonResults(false)}
@@ -1786,7 +2362,7 @@ export default function comparepdf() {
       <div className="grid grid-cols-1 md:grid-cols-10 border h-full">
         <div
           className={`${isSidebarVisible ? "md:col-span-7" : "col-span-12"
-            } bg-gray-100 overflow-y-auto custom-scrollbar transition-all duration-500 ease-in-out transform`}
+            } bg-gray-100 transition-all duration-500 ease-in-out transform`}
         >
           <div className="flex justify-between items-center sticky top-0 z-10 bg-white border-b">
             <div className="flex items-center">
@@ -1901,8 +2477,8 @@ export default function comparepdf() {
             </div>
           </div>
           {activeOption === "semantic" ? (
-            <div className="h-[calc(100%-3.2rem)] w-full bg-gray-100 p-4">
-              <PDFDualPanel
+            <div className="h-[calc(100vh-82px-3.3rem)]  md:h-[calc(100vh-82px-3.2rem)] w-full bg-gray-100 p-2 sm:p-4 overflow-hidden">
+              <PDFComaprePreview
                 // Container props
                 containerRef={containerRef}
                 leftWidth={leftWidth}
@@ -1942,13 +2518,17 @@ export default function comparepdf() {
                 PDFPreview={PDFPreview}
                 ZoomControls={ZoomControls}
                 SafeFileUploader={SafeFileUploader}
+                semanticMode={true}
+                overlayMode={false}
               />
-
             </div>
           ) : (
-            <div className="h-[calc(100%-3.2rem)] w-full bg-gray-100 p-4">
-              <div className="h-full w-full flex items-center justify-center">
-                <div className="relative h-full w-[50%]">
+            // Updated rendering section for your main component
+            <div className="h-[calc(100vh-82px-3.3rem)] md:h-[calc(100%-3.2rem)] w-full bg-gray-100 p-4 flex items-center justify-center overflow-hidden">
+              <div
+                className={`h-full w-[80%] md:w-[50%] flex items-center justify-center overflow-hidden `}
+              >
+                <div className="relative h-full w-[100%] overlay-container overflow-hidden">
                   {/* Render overlayDown files (Bottom Layer) */}
                   {overlayDown.map((file) => {
                     const isFileLoading = loadingPdfs.has(file.id);
@@ -1956,20 +2536,9 @@ export default function comparepdf() {
                     return (
                       <div
                         key={`down-${file.id}`}
-                        className="absolute inset-0 h-full"
-                        style={{ zIndex: 1 }} // Bottom layer
+                        className="overlay-layer overflow-hidden"
+                        style={{ zIndex: 1 }}
                       >
-                        {/* Remove button for overlayDown file */}
-                        <div className="absolute top-2 left-2 z-50">
-                          <button
-                            onClick={() => removeFile(file.id)}
-                            className="bg-blue-500 hover:bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm font-bold shadow-lg"
-                            title="Remove Bottom Layer"
-                          >
-                            ×
-                          </button>
-                        </div>
-
                         {/* Loading overlay for overlayDown */}
                         {isFileLoading && (
                           <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-40">
@@ -1982,34 +2551,39 @@ export default function comparepdf() {
                           </div>
                         )}
 
-                        {/* Single page display - only render selected page */}
+                        {/* PDF Preview with overlay support */}
                         <div
-                          className={`${rightZoom > 100
-                            ? "h-auto overflow-x-auto overflow-y-hidden"
+                          className={`overlay-scroll overflow-auto custom-scrollbar ${rightZoom > 100
+                            ? "h-auto"
                             : "h-full flex justify-center items-center"
                             }`}
                           style={{
                             width: rightZoom > 100 ? "max-content" : "auto",
                           }}
                         >
-                          <PDFPreview
+                          <OverlayPDFPreview
                             file={file}
-                            pageNumber={selectedPageDown} // This will show only the selected page
+                            pageNumber={selectedPageDown}
                             isLoading={isFileLoading}
                             onLoadSuccess={onDocumentLoadSuccess}
                             onLoadError={onDocumentLoadError}
                             isHealthy={pdfHealthCheck[file.id] !== false}
-                            isPasswordProtected={passwordProtectedFiles.has(
-                              file.id
-                            )}
+                            isPasswordProtected={passwordProtectedFiles.has(file.id)}
                             showRemoveButton={false}
                             userZoom={rightZoom}
                             isSinglePage={true}
+                            // Overlay props
+                            isOverlayMode={true}
+                            overlayOpacity={overlayOpacity}
+                            overlayBlendMode={overlayBlendMode}
+                            isTopLayer={false}
+                            showDifferences={showDifferences}
+                            highlightColor={highlightColor}
+                            overlayComparison={overlayComparison}
                             style={{
                               border: "none",
                               borderRadius: "0px",
                               boxShadow: "none",
-                              opacity: 0.7, // Make bottom layer slightly transparent
                               height: "100%",
                               width: "100%",
                             }}
@@ -2026,20 +2600,9 @@ export default function comparepdf() {
                     return (
                       <div
                         key={`up-${file.id}`}
-                        className="absolute inset-0 h-full"
-                        style={{ zIndex: 2 }} // Top layer
+                        className="overlay-layer overflow-hidden"
+                        style={{ zIndex: 2 }}
                       >
-                        {/* Remove button for overlayUp file */}
-                        <div className="absolute top-2 right-2 z-50">
-                          <button
-                            onClick={() => removeFile(file.id)}
-                            className="bg-red-500 hover:bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm font-bold shadow-lg"
-                            title="Remove Top Layer"
-                          >
-                            ×
-                          </button>
-                        </div>
-
                         {/* Loading overlay for overlayUp */}
                         {isFileLoading && (
                           <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-40">
@@ -2052,34 +2615,39 @@ export default function comparepdf() {
                           </div>
                         )}
 
-                        {/* Single page display - only render selected page */}
+                        {/* PDF Preview with overlay support */}
                         <div
-                          className={`${rightZoom > 100
-                            ? "h-auto overflow-x-auto overflow-y-hidden"
+                          className={`overlay-scroll overflow-auto custom-scrollbar ${rightZoom > 100
+                            ? "h-auto"
                             : "h-full flex justify-center items-center"
                             }`}
                           style={{
                             width: rightZoom > 100 ? "max-content" : "auto",
                           }}
                         >
-                          <PDFPreview
+                          <OverlayPDFPreview
                             file={file}
-                            pageNumber={selectedPageUp} // This will show only the selected page
+                            pageNumber={selectedPageUp}
                             isLoading={isFileLoading}
                             onLoadSuccess={onDocumentLoadSuccess}
                             onLoadError={onDocumentLoadError}
                             isHealthy={pdfHealthCheck[file.id] !== false}
-                            isPasswordProtected={passwordProtectedFiles.has(
-                              file.id
-                            )}
+                            isPasswordProtected={passwordProtectedFiles.has(file.id)}
                             showRemoveButton={false}
                             userZoom={rightZoom}
                             isSinglePage={true}
+                            // Overlay props
+                            isOverlayMode={true}
+                            overlayOpacity={overlayOpacity}
+                            overlayBlendMode={overlayBlendMode}
+                            isTopLayer={true}
+                            showDifferences={showDifferences}
+                            highlightColor={highlightColor}
+                            overlayComparison={overlayComparison}
                             style={{
                               border: "none",
                               borderRadius: "0px",
                               boxShadow: "none",
-                              opacity: 0.8, // Make top layer slightly transparent for overlay effect
                               height: "100%",
                               width: "100%",
                             }}
@@ -2088,6 +2656,32 @@ export default function comparepdf() {
                       </div>
                     );
                   })}
+
+                  {/* No files message */}
+                  {overlayDown.length === 0 && overlayUp.length === 0 && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                      <div className="text-center">
+                        <div className="text-gray-400 mb-2">
+                          <svg
+                            className="w-16 h-16 mx-auto"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={1}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                        </div>
+                        <p className="text-gray-500 text-sm">
+                          Upload PDF files to start overlay comparison
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2286,40 +2880,46 @@ export default function comparepdf() {
                         ) : comparisonResult?.requiresOCR ? (
                           <OCRNotification
                             requiresOCR={comparisonResult?.requiresOCR}
-                            leftIsImageBased={comparisonResult?.leftIsImageBased}
-                            rightIsImageBased={comparisonResult?.rightIsImageBased}
+                            leftIsImageBased={
+                              comparisonResult?.leftIsImageBased
+                            }
+                            rightIsImageBased={
+                              comparisonResult?.rightIsImageBased
+                            }
                             leftAnalysis={comparisonResult?.leftAnalysis}
                             rightAnalysis={comparisonResult?.rightAnalysis}
                             ocrToolUrl="/ocr-pdf"
                           />
                         ) : (
                           <>
-                            {comparisonResult && !comparisonResult.requiresOCR && (
-                              <div
-                                className="bg-purple-50 border border-purple-200 rounded-lg p-3 cursor-pointer hover:bg-purple-100 transition-colors duration-200 mx-3 sm:mx-4 md:mx-2 my-4"
-                                onClick={() => setShowComparisonResults(true)}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs sm:text-sm font-medium text-purple-800">
-                                    Comparison Ready
-                                  </span>
-                                  <div className="flex items-center gap-1 sm:gap-2">
-                                    <Search className="w-3 h-3 sm:w-4 sm:h-4 text-purple-500" />
-                                    <ArrowRight className="w-2 h-2 sm:w-3 sm:h-3 text-purple-500" />
+                            {comparisonResult &&
+                              !comparisonResult.requiresOCR && (
+                                <div
+                                  className="bg-purple-50 border border-purple-200 rounded-lg p-3 cursor-pointer hover:bg-purple-100 transition-colors duration-200 mx-3 sm:mx-4 md:mx-2 my-4"
+                                  onClick={() => setShowComparisonResults(true)}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs sm:text-sm font-medium text-purple-800">
+                                      Comparison Ready
+                                    </span>
+                                    <div className="flex items-center gap-1 sm:gap-2">
+                                      <Search className="w-3 h-3 sm:w-4 sm:h-4 text-purple-500" />
+                                      <ArrowRight className="w-2 h-2 sm:w-3 sm:h-3 text-purple-500" />
+                                    </div>
+                                  </div>
+                                  <div className="text-xs text-purple-600 mt-1">
+                                    {comparisonResult.similarity?.overall}%
+                                    similarity •{" "}
+                                    {comparisonResult.changes?.changePercentage}
+                                    % changed
+                                  </div>
+                                  <div className="text-xs text-purple-500 mt-2 font-medium">
+                                    Click to view detailed report →
                                   </div>
                                 </div>
-                                <div className="text-xs text-purple-600 mt-1">
-                                  {comparisonResult.similarity?.overall}% similarity •{" "}
-                                  {comparisonResult.changes?.changePercentage}% changed
-                                </div>
-                                <div className="text-xs text-purple-500 mt-2 font-medium">
-                                  Click to view detailed report →
-                                </div>
-                              </div>
-                            )}
+                              )}
                           </>
                         )}
-
                       </div>
                     )}
                   </div>
@@ -2333,8 +2933,6 @@ export default function comparepdf() {
                       </p>
                     </div>
                     <div className="w-full flex flex-col items-center leading-none gap-4">
-
-
                       {/* First upload section - overlayDown (Bottom Layer) */}
                       <div className="w-full max-w-lg">
                         <div
@@ -2564,114 +3162,158 @@ export default function comparepdf() {
                           </div>
                         </div>
                       </div>
-                      {showControls && (overlayDown.length > 0 || overlayUp.length > 0) && (
-                        <div className="bg-white rounded-xl shadow-lg border border-red-100 p-6 w-full">
-                          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                            <Palette className="w-5 h-5 text-red-600" />
-                            Overlay Controls
-                          </h3>
+                      {/* Updated condition: Show controls only when BOTH files are selected */}
+                      {showControls &&
+                        overlayDown.length > 0 &&
+                        overlayUp.length > 0 && (
+                          <div className="bg-white rounded-xl shadow-lg border border-red-100 p-6 w-full">
+                            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                              <Palette className="w-5 h-5 text-red-600" />
+                              Overlay Controls
+                            </h3>
 
-                          <div className="space-y-6">
-                            {/* Opacity Control */}
-                            <div>
-                              <label className="text-sm font-medium text-gray-700 block mb-3">
-                                Top Layer Opacity: <span className="text-red-600 font-semibold">{overlayOpacity}%</span>
-                              </label>
-                              <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                value={overlayOpacity}
-                                onChange={(e) => setOverlayOpacity(parseInt(e.target.value))}
-                                className="w-full h-2 bg-red-100 rounded-lg appearance-none cursor-pointer slider-thumb-red"
-                                style={{
-                                  background: `linear-gradient(to right, #fee2e2 0%, #dc2626 ${overlayOpacity}%, #fee2e2 ${overlayOpacity}%, #fee2e2 100%)`
-                                }}
-                              />
-                            </div>
-
-                            {/* Blend Mode */}
-                            <div>
-                              <label className="text-sm font-medium text-gray-700 block mb-3">
-                                Blend Mode
-                              </label>
-                              <select
-                                value={overlayBlendMode}
-                                onChange={(e) => setOverlayBlendMode(e.target.value)}
-                                className="w-full px-4 py-3 bg-white border-2 border-red-100 rounded-lg text-sm focus:outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600 transition-all duration-200 text-red-600 font-medium"
-                                style={{
-                                  color: '#dc2626'
-                                }}
-                              >
-                                <option value="normal" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Normal</option>
-                                <option value="multiply" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Multiply</option>
-                                <option value="overlay" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Overlay</option>
-                                <option value="difference" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Difference</option>
-                                <option value="screen" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Screen</option>
-                                <option value="hard-light" className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white">Hard Light</option>
-                              </select>
-                            </div>
-
-                            {/* Highlight Differences */}
-                            <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg">
+                            <div className="space-y-6">
+                              {/* Opacity Control */}
                               <div>
-                                <span className="text-sm font-medium text-gray-900 block">
-                                  Highlight Differences
-                                </span>
-                                <span className="text-xs text-gray-500">
-                                  Show visual differences between layers
-                                </span>
-                              </div>
-                              <button
-                                onClick={() => setShowDifferences(!showDifferences)}
-                                className={`w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner ${showDifferences
-                                    ? 'bg-red-600 shadow-lg'
-                                    : 'bg-gray-300 hover:bg-gray-400'
-                                  }`}
-                              >
-                                <div
-                                  className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-md ${showDifferences
-                                      ? 'translate-x-7 shadow-lg'
-                                      : 'translate-x-1'
-                                    }`}
-                                />
-                              </button>
-                            </div>
-
-                            {/* Highlight Color */}
-                            <div>
-                              <label className="text-sm font-medium text-gray-700 block mb-3">
-                                Highlight Color
-                              </label>
-                              <div className="relative">
+                                <label className="text-sm font-medium text-gray-700 block mb-3">
+                                  Top Layer Opacity:{" "}
+                                  <span className="text-red-600 font-semibold">
+                                    {overlayOpacity}%
+                                  </span>
+                                </label>
                                 <input
-                                  type="color"
-                                  value={highlightColor}
-                                  onChange={(e) => setHighlightColor(e.target.value)}
-                                  className="w-full h-12 bg-white border-2 border-red-100 rounded-lg cursor-pointer focus:outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600 transition-all duration-200"
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  value={overlayOpacity}
+                                  onChange={(e) =>
+                                    setOverlayOpacity(parseInt(e.target.value))
+                                  }
+                                  className="w-full h-2 bg-red-100 rounded-lg appearance-none cursor-pointer slider-thumb-red"
                                   style={{
-                                    backgroundColor: 'white'
+                                    background: `linear-gradient(to right, #fee2e2 0%, #dc2626 ${overlayOpacity}%, #fee2e2 ${overlayOpacity}%, #fee2e2 100%)`,
                                   }}
                                 />
                               </div>
-                            </div>
 
-                            {/* Reset Button */}
-                            <button
-                              onClick={() => {
-                                setOverlayOpacity(50);
-                                setOverlayBlendMode('normal');
-                                setShowDifferences(false);
-                                setHighlightColor('#ff0000');
-                              }}
-                              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-100 text-red-600 font-medium rounded-lg hover:bg-red-200 hover:text-red-700 active:bg-red-300 transition-all duration-200 shadow-sm hover:shadow-md"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                              Reset Controls
-                            </button>
+                              {/* Blend Mode */}
+                              <div>
+                                <label className="text-sm font-medium text-gray-700 block mb-3">
+                                  Blend Mode
+                                </label>
+                                <select
+                                  value={overlayBlendMode}
+                                  onChange={(e) =>
+                                    setOverlayBlendMode(e.target.value)
+                                  }
+                                  className="w-full px-4 py-3 bg-white border-2 border-red-100 rounded-lg text-sm focus:outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600 transition-all duration-200 text-red-600 font-medium"
+                                  style={{
+                                    color: "#dc2626",
+                                  }}
+                                >
+                                  <option
+                                    value="normal"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Normal
+                                  </option>
+                                  <option
+                                    value="multiply"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Multiply
+                                  </option>
+                                  <option
+                                    value="overlay"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Overlay
+                                  </option>
+                                  <option
+                                    value="difference"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Difference
+                                  </option>
+                                  <option
+                                    value="screen"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Screen
+                                  </option>
+                                  <option
+                                    value="hard-light"
+                                    className="text-red-600 bg-white hover:bg-red-100 active:bg-red-600 active:text-white"
+                                  >
+                                    Hard Light
+                                  </option>
+                                </select>
+                              </div>
+
+                              {/* Highlight Differences */}
+                              <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg">
+                                <div>
+                                  <span className="text-sm font-medium text-gray-900 block">
+                                    Highlight Differences
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    Show visual differences between layers
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={() =>
+                                    setShowDifferences(!showDifferences)
+                                  }
+                                  className={`w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner ${showDifferences
+                                    ? "bg-red-600 shadow-lg"
+                                    : "bg-gray-300 hover:bg-gray-400"
+                                    }`}
+                                >
+                                  <div
+                                    className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-md ${showDifferences
+                                      ? "translate-x-7 shadow-lg"
+                                      : "translate-x-1"
+                                      }`}
+                                  />
+                                </button>
+                              </div>
+
+                              {/* Highlight Color */}
+                              <div>
+                                <label className="text-sm font-medium text-gray-700 block mb-3">
+                                  Highlight Color
+                                </label>
+                                <div className="relative">
+                                  <input
+                                    type="color"
+                                    value={highlightColor}
+                                    onChange={(e) =>
+                                      setHighlightColor(e.target.value)
+                                    }
+                                    className="w-full h-12 bg-white border-2 border-red-100 rounded-lg cursor-pointer focus:outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600 transition-all duration-200"
+                                    style={{
+                                      backgroundColor: "white",
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Reset Button */}
+                              <button
+                                onClick={() => {
+                                  setOverlayOpacity(50);
+                                  setOverlayBlendMode("normal");
+                                  setShowDifferences(false);
+                                  setHighlightColor("#ff0000");
+                                }}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-100 text-red-600 font-medium rounded-lg hover:bg-red-200 hover:text-red-700 active:bg-red-300 transition-all duration-200 shadow-sm hover:shadow-md"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                Reset Controls
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
                       {overlayDown.length > 0 && overlayUp.length > 0 && (
                         <button
                           onClick={performOverlayAnalysis}
@@ -2691,7 +3333,6 @@ export default function comparepdf() {
                           )}
                         </button>
                       )}
-
                     </div>
                   </div>
                 )}
@@ -2810,45 +3451,6 @@ export default function comparepdf() {
         )}
       </div>
 
-      {/* Mobile Bottom Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg p-4 flex items-center gap-3 z-50">
-        <button
-          // onClick={handleAddWatermark}
-          disabled={files.length === 0}
-          className={`flex-1 py-3 px-4 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${files.length > 0
-            ? "bg-red-600 hover:bg-red-700"
-            : "bg-gray-300 cursor-not-allowed"
-            }`}
-        >
-          Comapre PDF
-          <ArrowRight className="w-4 h-4" />
-        </button>
-        <button
-          onClick={toggleSidebar}
-          className="w-12 h-12 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center justify-center transition-colors duration-200"
-        >
-          <svg
-            className="w-5 h-5 text-gray-600"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-            />
-          </svg>
-        </button>
-      </div>
-
       <PasswordModelPreveiw
         isOpen={showPasswordModal}
         onClose={() => {
@@ -2871,8 +3473,185 @@ export default function comparepdf() {
           justify-content: center !important;
           align-items: center !important;
         }
+        /* PDF Overlay Styles */
+        .overlay-page {
+          transition: opacity 0.3s ease, mix-blend-mode 0.3s ease;
+        }
+
+        /* Custom slider styles for overlay controls */
+        .slider-thumb-red::-webkit-slider-thumb {
+          appearance: none;
+          height: 20px;
+          width: 20px;
+          border-radius: 50%;
+          background: #dc2626;
+          cursor: pointer;
+          box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+          transition: all 0.2s ease;
+        }
+
+        .slider-thumb-red::-webkit-slider-thumb:hover {
+          transform: scale(1.1);
+          box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+        }
+
+        .slider-thumb-red::-moz-range-thumb {
+          height: 20px;
+          width: 20px;
+          border-radius: 50%;
+          background: #dc2626;
+          cursor: pointer;
+          border: none;
+          box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+          transition: all 0.2s ease;
+        }
+
+        .slider-thumb-red::-moz-range-thumb:hover {
+          transform: scale(1.1);
+          box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+        }
+
+        /* Blend mode specific styles - Updated for better compatibility */
+        .blend-normal {
+          mix-blend-mode: normal !important;
+        }
+
+        .blend-multiply {
+          mix-blend-mode: multiply !important;
+          isolation: isolate;
+        }
+
+        .blend-overlay {
+          mix-blend-mode: overlay !important;
+          isolation: isolate;
+        }
+
+        .blend-difference {
+          mix-blend-mode: difference !important;
+          isolation: isolate;
+        }
+
+        .blend-screen {
+          mix-blend-mode: screen !important;
+          isolation: isolate;
+        }
+
+        .blend-hard-light {
+          mix-blend-mode: hard-light !important;
+          isolation: isolate;
+        }
+
+        /* Additional blend modes for better effects */
+        .blend-soft-light {
+          mix-blend-mode: soft-light !important;
+          isolation: isolate;
+        }
+
+        .blend-color-dodge {
+          mix-blend-mode: color-dodge !important;
+          isolation: isolate;
+        }
+
+        .blend-color-burn {
+          mix-blend-mode: color-burn !important;
+          isolation: isolate;
+        }
+
+        .blend-darken {
+          mix-blend-mode: darken !important;
+          isolation: isolate;
+        }
+
+        .blend-lighten {
+          mix-blend-mode: lighten !important;
+          isolation: isolate;
+        }
+
+        /* Overlay container positioning */
+        .overlay-container {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+        }
+
+        .overlay-layer {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+        }
+
+        /* Difference highlight animations */
+        .difference-highlight {
+          animation: pulse-highlight 2s infinite;
+        }
+
+        @keyframes pulse-highlight {
+          0%,
+          100% {
+            opacity: 0.6;
+          }
+          50% {
+            opacity: 1;
+          }
+        }
+
+        /* Layer indicators */
+        .layer-indicator {
+          backdrop-filter: blur(4px);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Custom scrollbar for overlay areas */
+        .overlay-scroll::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+
+        .overlay-scroll::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 4px;
+        }
+
+        .overlay-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 4px;
+        }
+
+        .overlay-scroll::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
+        /* Mobile responsive fixes */
+        @media (max-width: 768px) {
+          .overlay-controls {
+            padding: 1rem;
+          }
+
+          .layer-indicator {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+          }
+          
+          /* Ensure no main container overflow on mobile */
+         
+        }
+
+        /* Print styles for overlay exports */
+        @media print {
+          .overlay-container {
+            break-inside: avoid;
+          }
+
+          .layer-indicator,
+          .difference-highlight {
+            display: none;
+          }
+        }
       `}</style>
     </div>
   );
 }
-
