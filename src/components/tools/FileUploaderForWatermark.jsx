@@ -189,7 +189,7 @@ export default function FileUploaderForWatermark({
 
     return (
       <div className="flex items-center gap-2">
-        <div className="relative z-40">
+        <div className="relative">
           <button
             onMouseEnter={() => setShowUploadMenu(true)}
             onMouseLeave={() => setShowUploadMenu(false)}
@@ -216,11 +216,10 @@ export default function FileUploaderForWatermark({
     if (!isMultiple) return null;
     return (
       <div
-        className={`h-full border-2 border-dashed flex flex-col items-center justify-center relative transition-colors duration-200 ${
-          isDrag
-            ? "border-blue-400 bg-blue-50"
-            : "border-gray-300 bg-gray-50 hover:border-gray-400"
-        }`}
+        className={`h-full border-2 border-dashed flex flex-col items-center justify-center relative transition-colors duration-200 ${isDrag
+          ? "border-blue-400 bg-blue-50"
+          : "border-gray-300 bg-gray-50 hover:border-gray-400"
+          }`}
         onDragOver={(e) => {
           e.preventDefault();
           if (setIsDragging) {
@@ -304,11 +303,10 @@ export default function FileUploaderForWatermark({
 
           <div className="max-w-2xl mx-auto">
             <div
-              className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 relative ${
-                isDragOver
-                  ? "border-red-500 bg-red-50"
-                  : "border-gray-300 bg-white hover:border-red-400 hover:bg-red-50"
-              }`}
+              className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-300 relative ${isDragOver
+                ? "border-red-500 bg-red-50"
+                : "border-gray-300 bg-white hover:border-red-400 hover:bg-red-50"
+                }`}
             >
               {/* Cloud Service Buttons - Top Right Corner */}
               <div className="absolute top-4 right-4 flex gap-2">
