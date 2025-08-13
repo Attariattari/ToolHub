@@ -65,10 +65,11 @@ function SidebarContent({
             <div
               onClick={() => handleOptionChange("semantic")}
               className={`relative w-1/2 h-28 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all
-      ${activeOption === "semantic"
-                  ? "bg-red-100 border-l border-red-600 border-b-0"
-                  : "bg-white border-l-0 border-b border-gray-300"
-                }`}
+      ${
+        activeOption === "semantic"
+          ? "bg-red-100 border-l border-red-600 border-b-0"
+          : "bg-white border-l-0 border-b border-gray-300"
+      }`}
             >
               {activeOption === "semantic" && (
                 <div className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
@@ -77,10 +78,11 @@ function SidebarContent({
               )}
               <div className="flex flex-col p-0 m-0 items-center leading-none">
                 <div
-                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${activeOption === "semantic"
-                    ? "text-red-600"
-                    : "text-gray-500"
-                    }`}
+                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${
+                    activeOption === "semantic"
+                      ? "text-red-600"
+                      : "text-gray-500"
+                  }`}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -109,8 +111,9 @@ function SidebarContent({
                 </div>
               </div>
               <p
-                className={`text-sm font-medium ${activeOption === "semantic" ? "text-red-600" : "text-gray-500"
-                  }`}
+                className={`text-sm font-medium ${
+                  activeOption === "semantic" ? "text-red-600" : "text-gray-500"
+                }`}
               >
                 Semantic Text
               </p>
@@ -119,10 +122,11 @@ function SidebarContent({
             <div
               onClick={() => handleOptionChange("overlay")}
               className={`relative w-1/2 h-28 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all
-      ${activeOption === "overlay"
-                  ? "bg-red-100 border-l border-red-600 border-b-0"
-                  : "bg-white border-l-0 border-b border-gray-300"
-                }`}
+      ${
+        activeOption === "overlay"
+          ? "bg-red-100 border-l border-red-600 border-b-0"
+          : "bg-white border-l-0 border-b border-gray-300"
+      }`}
             >
               {activeOption === "overlay" && (
                 <div className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
@@ -131,10 +135,11 @@ function SidebarContent({
               )}
               <div className="flex flex-col p-0 m-0 items-center leading-none">
                 <div
-                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${activeOption === "overlay"
-                    ? "text-red-600"
-                    : "text-gray-500"
-                    }`}
+                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${
+                    activeOption === "overlay"
+                      ? "text-red-600"
+                      : "text-gray-500"
+                  }`}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -163,8 +168,9 @@ function SidebarContent({
                 </div>
               </div>
               <p
-                className={`text-sm font-medium ${activeOption === "overlay" ? "text-red-600" : "text-gray-500"
-                  }`}
+                className={`text-sm font-medium ${
+                  activeOption === "overlay" ? "text-red-600" : "text-gray-500"
+                }`}
               >
                 Content Overlay
               </p>
@@ -289,20 +295,22 @@ function SidebarContent({
                 {/* Second upload section - overlayUp (Top Layer) */}
                 <div className="w-full max-w-lg">
                   <div
-                    className={`flex items-center gap-4 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 ${overlayUp?.length > 0
-                      ? "border border-red-100 bg-white"
-                      : "border-2 border-dashed border-red-100 bg-red-50 hover:bg-red-100"
-                      }`}
+                    className={`flex items-center gap-4 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 ${
+                      overlayUp?.length > 0
+                        ? "border border-red-100 bg-white"
+                        : "border-2 border-dashed border-red-100 bg-red-50 hover:bg-red-100"
+                    }`}
                   >
                     <div className="flex-shrink-0">
                       <Image className="w-6 h-6 text-red-600" />
                     </div>
                     <div className="flex-1">
                       <div
-                        className={`text-sm font-medium mb-2 ${overlayUp?.length > 0
-                          ? "text-gray-800"
-                          : "text-red-600"
-                          }`}
+                        className={`text-sm font-medium mb-2 ${
+                          overlayUp?.length > 0
+                            ? "text-gray-800"
+                            : "text-red-600"
+                        }`}
                       >
                         {overlayUp?.length > 0
                           ? overlayUp[0]?.name?.length > 30
@@ -399,20 +407,22 @@ function SidebarContent({
                 {/* First upload section - overlayDown (Bottom Layer) */}
                 <div className="w-full max-w-lg">
                   <div
-                    className={`flex items-center gap-4 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 ${overlayDown?.length > 0
-                      ? "border border-red-100 bg-white"
-                      : "border-2 border-dashed border-red-100 bg-red-50 hover:bg-red-100"
-                      }`}
+                    className={`flex items-center gap-4 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 ${
+                      overlayDown?.length > 0
+                        ? "border border-red-100 bg-white"
+                        : "border-2 border-dashed border-red-100 bg-red-50 hover:bg-red-100"
+                    }`}
                   >
                     <div className="flex-shrink-0">
                       <Image className="w-6 h-6 text-red-600" />
                     </div>
                     <div className="flex-1">
                       <div
-                        className={`text-sm font-medium mb-2 ${overlayDown?.length > 0
-                          ? "text-gray-800"
-                          : "text-red-600"
-                          }`}
+                        className={`text-sm font-medium mb-2 ${
+                          overlayDown?.length > 0
+                            ? "text-gray-800"
+                            : "text-red-600"
+                        }`}
                       >
                         {overlayDown?.length > 0
                           ? overlayDown[0]?.name?.length > 30
@@ -610,16 +620,18 @@ function SidebarContent({
                           </div>
                           <button
                             onClick={() => setShowDifferences(!showDifferences)}
-                            className={`w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner ${showDifferences
-                              ? "bg-red-600 shadow-lg"
-                              : "bg-gray-300 hover:bg-gray-400"
-                              }`}
+                            className={`w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner ${
+                              showDifferences
+                                ? "bg-red-600 shadow-lg"
+                                : "bg-gray-300 hover:bg-gray-400"
+                            }`}
                           >
                             <div
-                              className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-md ${showDifferences
-                                ? "translate-x-7 shadow-lg"
-                                : "translate-x-1"
-                                }`}
+                              className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all duration-300 shadow-md ${
+                                showDifferences
+                                  ? "translate-x-7 shadow-lg"
+                                  : "translate-x-1"
+                              }`}
                             />
                           </button>
                         </div>
@@ -708,12 +720,13 @@ function SidebarContent({
               rightFiles?.length === 0 ||
               comparisonResult?.requiresOCR // Disable when OCR is required
             }
-            className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${comparisonResult?.requiresOCR
-              ? "bg-orange-300 cursor-not-allowed" // Disabled state for OCR
-              : comparisonResult && !comparisonResult.requiresOCR
+            className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${
+              comparisonResult?.requiresOCR
+                ? "bg-orange-300 cursor-not-allowed" // Disabled state for OCR
+                : comparisonResult && !comparisonResult.requiresOCR
                 ? "bg-green-600 hover:bg-green-700 hover:scale-105 shadow-lg"
                 : "bg-red-300 cursor-not-allowed"
-              }`}
+            }`}
           >
             {comparisonResult?.requiresOCR ? (
               <>
@@ -744,10 +757,11 @@ function SidebarContent({
               toast.success("Overlay report created successfully!");
             }}
             disabled={leftFiles?.length === 0 || rightFiles?.length === 0}
-            className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${leftFiles?.length > 0 && rightFiles?.length > 0
-              ? "bg-red-300 hover:bg-red-600 hover:scale-105 shadow-lg"
-              : "bg-gray-300 cursor-not-allowed"
-              }`}
+            className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${
+              leftFiles?.length > 0 && rightFiles?.length > 0
+                ? "bg-red-300 hover:bg-red-600 hover:scale-105 shadow-lg"
+                : "bg-gray-300 cursor-not-allowed"
+            }`}
           >
             <FileText className="w-5 h-5" />
             Download Report

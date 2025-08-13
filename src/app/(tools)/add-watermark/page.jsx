@@ -519,9 +519,6 @@ export default function addwatermark() {
   };
 
   useEffect(() => {
-    console.log("Selected Positions:", selected);
-    console.log("Is Mosaic Active?:", isMosaic);
-
     if (selected.length === 0) {
       setSelected(["left-top"]);
     } else if (selected.length === 9) {
@@ -599,31 +596,6 @@ export default function addwatermark() {
       }
     }
   }, [selectedFileId, files]);
-
-  useEffect(() => {
-    const defaultPdfContent = new Uint8Array([
-      0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34,
-    ]);
-    const blob = new Blob([defaultPdfContent], { type: "application/pdf" });
-
-    const defaultFile = {
-      id: Date.now() + Math.random(),
-      name: "facebook_com_watermark.pdf",
-      size: `${(blob.size / (1024 * 1024)).toFixed(2)} MB`,
-      type: "application/pdf",
-      file: new File([blob], "facebook_com_watermark.pdf", {
-        type: "application/pdf",
-      }),
-      stableData: {
-        blob: blob,
-        dataUrl: URL.createObjectURL(blob),
-        isPasswordProtected: false,
-        uint8Array: defaultPdfContent,
-      },
-    };
-
-    setFiles([defaultFile]);
-  }, []);
 
   // Check if a file is password protected by trying to read it
   const checkPasswordProtection = useCallback(async (file, id) => {
@@ -2206,7 +2178,7 @@ export default function addwatermark() {
             )}
           </div>
 
-          <div className="p-6 border-t">
+          <div className="p-6 border-t sticky bottom-0 bg-white">
             <button
               onClick={handleAddWatermark}
               disabled={files.length === 0}
