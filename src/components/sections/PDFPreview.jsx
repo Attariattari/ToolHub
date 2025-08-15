@@ -34,8 +34,9 @@ const PDFPreview = memo(
     // Fixed width calculation for single page PDFs
     const actualPDFWidth = useMemo(() => {
       if (isSinglePage) {
-        // For single page PDFs, always use container-based calculation
-        return (containerWidth * userZoom) / 100;
+        // For single page PDFs, use fixed base width like multi-page for consistency
+        const baseWidth = 800; // Use same base width as multi-page
+        return (baseWidth * userZoom) / 100;
       } else {
         // Multi-page logic remains the same
         return userZoom > 100
@@ -195,18 +196,27 @@ const PDFPreview = memo(
               >
                 {documentLoaded && (
                   <div
-                    className={`${isSinglePage
+                    className={`${
+                      isSinglePage
                         ? userZoom > 100
-                          ? "py-4 min-h-full overflow-x-auto overflow-y-hidden flex justify-center" // Single page zoomed: horizontal scroll with center
-                          : "py-4 min-h-full flex justify-center items-center" // Single page normal: center it
+                          ? "py-4 min-h-full overflow-x-auto overflow-y-hidden flex justify-start" // Single page zoomed in: horizontal scroll from left
+                          : "py-4 min-h-full flex justify-start items-start" // Single page normal: start from left
                         : userZoom > 100
-                          ? "w-full" // Multi-page zoomed: full width
-                          : "flex justify-center" // Multi-page normal: center it
-                      }`}
+                        ? "w-full" // Multi-page zoomed: full width
+                        : "flex justify-center" // Multi-page normal: center it
+                    }`}
                     style={{
                       // Simplified width handling
-                      minWidth: userZoom > 100 ? "max-content" : "auto",
-                      width: userZoom > 100 ? "max-content" : "auto",
+                      minWidth:
+                        (isSinglePage && userZoom > 100) ||
+                        (!isSinglePage && userZoom > 100)
+                          ? "max-content"
+                          : "auto",
+                      width:
+                        (isSinglePage && userZoom > 100) ||
+                        (!isSinglePage && userZoom > 100)
+                          ? "max-content"
+                          : "auto",
                     }}
                   >
                     <Page

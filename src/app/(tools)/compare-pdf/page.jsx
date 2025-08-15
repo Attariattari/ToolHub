@@ -574,8 +574,8 @@ export default function comparepdf() {
             <span className="text-xs text-blue-500">
               {progress < 100
                 ? `Estimated: ${Math.ceil(
-                  (100 - progress) / 10
-                )} seconds remaining`
+                    (100 - progress) / 10
+                  )} seconds remaining`
                 : "Almost done..."}
             </span>
           </div>
@@ -674,6 +674,35 @@ export default function comparepdf() {
     [checkPasswordProtection]
   );
 
+  // Helper function to get PDF dimensions
+  const getPDFDimensions = async (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const typedarray = new Uint8Array(e.target.result);
+          const pdf = await pdfjsLib.getDocument(typedarray).promise;
+          const page = await pdf.getPage(1); // Get first page
+          const viewport = page.getViewport({ scale: 1.0 });
+
+          resolve({
+            width: viewport.width,
+            height: viewport.height,
+            success: true,
+          });
+        } catch (error) {
+          console.error("Error getting PDF dimensions:", error);
+          resolve({
+            width: 0,
+            height: 0,
+            success: false,
+          });
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
   const handleFiles = useCallback(
     async (newFiles, targetSide = null) => {
       // Handle both FileList and array of files
@@ -685,6 +714,9 @@ export default function comparepdf() {
           const id = `${file.name}-${Date.now()}-${Math.random()}`;
           const stableData = await createStableFileData(file, id);
 
+          // Get PDF dimensions for height comparison
+          const dimensions = await getPDFDimensions(file);
+
           return {
             id,
             file,
@@ -693,90 +725,188 @@ export default function comparepdf() {
             type: file.type,
             stableData,
             numPages: null,
+            dimensions, // Store dimensions for comparison
           };
         })
       );
 
       // Check active option and handle accordingly
       if (activeOption === "semantic") {
-        // SEMANTIC TEXT COMPARISON LOGIC (existing code)
+        // SEMANTIC TEXT COMPARISON LOGIC (existing code remains same)
         console.log("Handling files for semantic comparison");
 
-        // Check if this is first time (both sides empty) and user selected multiple files
         const isFirstTime = leftFiles.length === 0 && rightFiles.length === 0;
         const hasMultipleFiles = fileObjects.length > 1;
 
         if (isFirstTime && hasMultipleFiles) {
-          setLeftFiles([fileObjects[0]]); // Only first file to left
-          setRightFiles([fileObjects[1]]); // Only second file to right
+          setLeftFiles([fileObjects[0]]);
+          setRightFiles([fileObjects[1]]);
 
-          // If more than 2 files, ignore the rest
           if (fileObjects.length > 2) {
             console.log("More than 2 files selected, ignoring the rest");
           }
         } else {
-          // Normal behavior - add to specific side (only one file at a time)
           const sideToUse = targetSide || activeSide || "left";
           console.log("sideToUse:", sideToUse);
 
-          // Take only the first file (limit to one file per side)
           const singleFile = fileObjects[0];
 
           if (sideToUse === "right") {
-            setRightFiles([singleFile]); // Replace with single file
+            setRightFiles([singleFile]);
           } else {
-            setLeftFiles([singleFile]); // Replace with single file
+            setLeftFiles([singleFile]);
           }
 
-          // If multiple files selected but not first time, show warning or ignore
           if (fileObjects.length > 1) {
             console.log("Multiple files selected, only using the first one");
           }
         }
 
-        setActiveSide(null); // Reset after adding files
+        setActiveSide(null);
       } else if (activeOption === "overlay") {
-        // OVERLAY PDF COMPARISON LOGIC - UP FIRST, THEN DOWN
-        console.log("Handling files for overlay comparison");
+        // OVERLAY PDF COMPARISON LOGIC - HEIGHT-BASED ASSIGNMENT
+        console.log(
+          "Handling files for overlay comparison with height detection"
+        );
 
-        // Check if this is first time (both overlay arrays empty) and user selected multiple files
         const isFirstTime = overlayDown.length === 0 && overlayUp.length === 0;
         const hasMultipleFiles = fileObjects.length > 1;
 
         if (isFirstTime && hasMultipleFiles) {
-          // First file goes to overlayUp (top layer), second to overlayDown (bottom layer)
-          setOverlayUp([fileObjects[0]]); // Top layer - first selected
-          setOverlayDown([fileObjects[1]]); // Bottom layer - second selected
+          // Compare heights of first two files
+          const file1 = fileObjects[0];
+          const file2 = fileObjects[1];
 
-          // If more than 2 files, ignore the rest
+          console.log("File 1 dimensions:", file1.dimensions);
+          console.log("File 2 dimensions:", file2.dimensions);
+
+          // Assign based on height - taller file goes to UP (top layer)
+          if (file1.dimensions.height >= file2.dimensions.height) {
+            setOverlayUp([file1]); // Taller file to top
+            setOverlayDown([file2]); // Shorter file to bottom
+            console.log(
+              `File1 (${file1.name}) has height ${file1.dimensions.height} - assigned to UP`
+            );
+            console.log(
+              `File2 (${file2.name}) has height ${file2.dimensions.height} - assigned to DOWN`
+            );
+          } else {
+            setOverlayUp([file2]); // Taller file to top
+            setOverlayDown([file1]); // Shorter file to bottom
+            console.log(
+              `File2 (${file2.name}) has height ${file2.dimensions.height} - assigned to UP`
+            );
+            console.log(
+              `File1 (${file1.name}) has height ${file1.dimensions.height} - assigned to DOWN`
+            );
+          }
+
+          // Reset page numbers for both layers
+          setSelectedPageUp(1);
+          setSelectedPageDown(1);
+          console.log("Reset page numbers for both overlay layers to 1");
+
           if (fileObjects.length > 2) {
             console.log(
               "More than 2 files selected for overlay, ignoring the rest"
             );
           }
         } else {
-          // Sequential file selection - UP FIRST, THEN DOWN
-          const singleFile = fileObjects[0]; // Take only first file
+          // Sequential file selection with height-based assignment
+          const singleFile = fileObjects[0];
 
-          if (overlayUp.length === 0) {
-            // First file selection goes to top layer (UP)
+          if (overlayUp.length === 0 && overlayDown.length === 0) {
+            // First file - goes to UP by default
             setOverlayUp([singleFile]);
-            console.log("First file added to overlay up (top layer)");
-          } else if (overlayDown.length === 0) {
-            // Second file selection goes to bottom layer (DOWN)
-            setOverlayDown([singleFile]);
-            console.log("Second file added to overlay down (bottom layer)");
+            setSelectedPageUp(1); // Reset page number
+            console.log(
+              "First file added to overlay up (top layer) - page reset to 1"
+            );
+          } else if (overlayUp.length > 0 && overlayDown.length === 0) {
+            // Second file - compare with existing UP file
+            const existingUpFile = overlayUp[0];
+
+            console.log("Comparing heights:");
+            console.log(
+              "Existing UP file height:",
+              existingUpFile.dimensions?.height || "unknown"
+            );
+            console.log("New file height:", singleFile.dimensions.height);
+
+            if (
+              singleFile.dimensions.height >
+              (existingUpFile.dimensions?.height || 0)
+            ) {
+              // New file is taller - move existing to DOWN, new to UP
+              setOverlayDown([existingUpFile]);
+              setOverlayUp([singleFile]);
+              setSelectedPageUp(1); // Reset UP page number
+              setSelectedPageDown(1); // Reset DOWN page number
+              console.log(
+                "New file is taller - moved to UP, existing moved to DOWN - both pages reset to 1"
+              );
+            } else {
+              // Existing file is taller - new file goes to DOWN
+              setOverlayDown([singleFile]);
+              setSelectedPageDown(1); // Reset DOWN page number
+              console.log(
+                "Existing file is taller - new file added to DOWN - DOWN page reset to 1"
+              );
+            }
+          } else if (overlayDown.length > 0 && overlayUp.length === 0) {
+            // Only DOWN exists - compare and assign
+            const existingDownFile = overlayDown[0];
+
+            if (
+              singleFile.dimensions.height >
+              (existingDownFile.dimensions?.height || 0)
+            ) {
+              // New file is taller - goes to UP
+              setOverlayUp([singleFile]);
+              setSelectedPageUp(1); // Reset UP page number
+              console.log(
+                "New file is taller than DOWN file - added to UP - UP page reset to 1"
+              );
+            } else {
+              // Existing DOWN file is taller - move it to UP, new to DOWN
+              setOverlayUp([existingDownFile]);
+              setOverlayDown([singleFile]);
+              setSelectedPageUp(1); // Reset UP page number
+              setSelectedPageDown(1); // Reset DOWN page number
+              console.log(
+                "DOWN file is taller - moved to UP, new file to DOWN - both pages reset to 1"
+              );
+            }
           } else {
-            // Both positions filled - replace overlayUp (top layer)
-            setOverlayUp([singleFile]);
-            console.log("Both overlay positions filled, replacing top layer");
+            // Both positions filled - compare with both and reorganize
+            const existingUpFile = overlayUp[0];
+            const existingDownFile = overlayDown[0];
 
-            // Alternative: Or replace overlayDown and move current overlayDown to overlayUp
-            // setOverlayDown(overlayUp);
-            // setOverlayUp([singleFile]);
+            const files = [existingUpFile, existingDownFile, singleFile];
+
+            // Sort by height (tallest first)
+            files.sort(
+              (a, b) =>
+                (b.dimensions?.height || 0) - (a.dimensions?.height || 0)
+            );
+
+            setOverlayUp([files[0]]); // Tallest to UP
+            setOverlayDown([files[1]]); // Second tallest to DOWN
+            setSelectedPageUp(1); // Reset UP page number
+            setSelectedPageDown(1); // Reset DOWN page number
+
+            console.log("Reorganized files by height - both pages reset to 1:");
+            console.log(
+              `UP: ${files[0].name} (height: ${files[0].dimensions?.height})`
+            );
+            console.log(
+              `DOWN: ${files[1].name} (height: ${files[1].dimensions?.height})`
+            );
+            console.log(
+              `Ignored: ${files[2].name} (height: ${files[2].dimensions?.height})`
+            );
           }
 
-          // If multiple files selected, show warning
           if (fileObjects.length > 1) {
             console.log(
               "Multiple files selected for overlay, only using the first one"
@@ -1496,7 +1626,140 @@ export default function comparepdf() {
     const downCount = Array.isArray(overlayDown) ? overlayDown.length : 0;
     const upCount = Array.isArray(overlayUp) ? overlayUp.length : 0;
     return downCount + upCount;
-  }
+  };
+  const overlayContainerRef = useRef(null);
+  useEffect(() => {
+    const bottomLayer = bottomLayerRef.current;
+    const topLayer = topLayerRef.current;
+
+    // Only sync if both layers exist
+    if (
+      !bottomLayer ||
+      !topLayer ||
+      overlayDown.length === 0 ||
+      overlayUp.length === 0
+    ) {
+      return;
+    }
+
+    const handleBottomScroll = (e) => {
+      if (topLayer && topLayer !== e.target) {
+        topLayer.scrollLeft = e.target.scrollLeft;
+        topLayer.scrollTop = e.target.scrollTop;
+      }
+    };
+
+    const handleTopScroll = (e) => {
+      if (bottomLayer && bottomLayer !== e.target) {
+        bottomLayer.scrollLeft = e.target.scrollLeft;
+        bottomLayer.scrollTop = e.target.scrollTop;
+      }
+    };
+
+    bottomLayer.addEventListener("scroll", handleBottomScroll);
+    topLayer.addEventListener("scroll", handleTopScroll);
+
+    return () => {
+      bottomLayer.removeEventListener("scroll", handleBottomScroll);
+      topLayer.removeEventListener("scroll", handleTopScroll);
+    };
+  }, [overlayDown.length, overlayUp.length]);
+
+  // Render PDF content with proper styling
+  const renderPDFLayer = (files, pageNumber, isTopLayer = false, layerRef) => {
+    if (files.length === 0) return null;
+
+    const hasOtherLayer = isTopLayer
+      ? overlayDown.length > 0
+      : overlayUp.length > 0;
+
+    return (
+      <div
+        ref={layerRef}
+        className="absolute inset-0 overflow-auto custom-scrollbar"
+        style={{
+          zIndex: isTopLayer ? 3 : hasOtherLayer ? 1 : 2,
+          width: "100%",
+          height: "100%",
+          opacity: isTopLayer ? overlayOpacity / 100 : 1,
+          mixBlendMode: isTopLayer ? overlayBlendMode : "normal",
+        }}
+      >
+        {/* Content wrapper - crucial for proper scrolling */}
+        <div
+          style={{
+            width: rightZoom > 100 ? "max-content" : "100%",
+            minHeight: "max-content", // Key change: use max-content instead of 100%
+            padding: "0",
+            margin: "0",
+          }}
+        >
+          {files.map((file, index) => {
+            const isFileLoading = loadingPdfs.has(file.id);
+
+            return (
+              <div
+                key={`${isTopLayer ? "up" : "down"}-${file.id}`}
+                className="w-full relative"
+                style={{
+                  minWidth: rightZoom > 100 ? "max-content" : "100%",
+                  marginBottom: index < files.length - 1 ? "20px" : "0",
+                  pointerEvents: isTopLayer && hasOtherLayer ? "none" : "auto",
+                }}
+              >
+                {/* Loading overlay */}
+                {isFileLoading && (
+                  <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-40">
+                    <div className="flex flex-col items-center gap-3">
+                      <div
+                        className={`w-8 h-8 border-4 border-gray-300 ${
+                          isTopLayer ? "border-t-red-600" : "border-t-blue-600"
+                        } rounded-full animate-spin`}
+                      />
+                      <div className="text-sm text-gray-600 font-medium">
+                        Loading {isTopLayer ? "Top" : "Bottom"} Layer...
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ width: "100%" }}>
+                  <OverlayPDFPreview
+                    file={file}
+                    pageNumber={pageNumber}
+                    isLoading={isFileLoading}
+                    onLoadSuccess={onDocumentLoadSuccess}
+                    onLoadError={onDocumentLoadError}
+                    isHealthy={pdfHealthCheck[file.id] !== false}
+                    isPasswordProtected={passwordProtectedFiles.has(file.id)}
+                    showRemoveButton={false}
+                    userZoom={rightZoom}
+                    isSinglePage={true}
+                    isOverlayMode={true}
+                    overlayOpacity={100}
+                    overlayBlendMode="normal"
+                    isTopLayer={isTopLayer}
+                    getTotalOverlayFilesCount={getTotalOverlayFilesCount}
+                    showDifferences={showDifferences}
+                    highlightColor={highlightColor}
+                    overlayComparison={overlayComparison}
+                    style={{
+                      border: "none",
+                      borderRadius: "0px",
+                      boxShadow: "none",
+                      width: "100%",
+                      height: "auto",
+                      display: "block",
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   // Direct inline condition
   if (
@@ -1539,8 +1802,9 @@ export default function comparepdf() {
 
       <div className="grid grid-cols-1 md:grid-cols-10 border h-full">
         <div
-          className={`${isSidebarVisible ? "md:col-span-7" : "col-span-12"
-            } bg-gray-100 transition-all duration-500 ease-in-out transform`}
+          className={`${
+            isSidebarVisible ? "md:col-span-7" : "col-span-12"
+          } bg-gray-100 transition-all duration-500 ease-in-out transform`}
         >
           <div className="flex justify-between items-center sticky top-0 z-10 bg-white border-b">
             <div className="flex items-center">
@@ -1710,144 +1974,49 @@ export default function comparepdf() {
             </div>
           ) : (
             // Updated rendering section for your main component
-            <div className="h-[calc(100vh-82px-3.3rem)] md:h-[calc(100%-3.2rem)] w-full bg-gray-100 p-4 flex items-center justify-center overflow-hidden">
-              <div
-                className={`h-full w-[80%] md:w-[60%] flex items-center justify-center overflow-hidden `}
-              >
-                <div className="relative h-full w-[100%] overlay-container overflow-hidden">
-                  {/* Render overlayDown files (Bottom Layer) */}
-                  {overlayDown.map((file) => {
-                    const isFileLoading = loadingPdfs.has(file.id);
+            <div className="h-[calc(100vh-82px-3.3rem)] md:h-[calc(100%-3.2rem)] w-[100%] bg-gray-100 pt-4 flex items-center justify-center overflow-hidden">
+              <div className="h-full w-[80%] md:w-[60%] flex items-center justify-center">
+                <div
+                  ref={overlayContainerRef}
+                  className="h-full w-[100%] relative overflow-hidden"
+                  style={{ position: "relative" }}
+                >
+                  {/* Bottom Layer */}
+                  {renderPDFLayer(
+                    overlayDown,
+                    selectedPageDown,
+                    false,
+                    bottomLayerRef
+                  )}
 
-                    return (
+                  {/* Top Layer */}
+                  {renderPDFLayer(overlayUp, selectedPageUp, true, topLayerRef)}
+
+                  {/* Unified Overlay Canvas for Highlights */}
+                  {showDifferences &&
+                    (overlayDown.length > 0 || overlayUp.length > 0) && (
                       <div
-                        key={`down-${file.id}`}
-                        className="overlay-layer overflow-hidden"
-                        style={{ zIndex: 1 }}
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          zIndex: 10,
+                          width: "100%",
+                          height: "100%",
+                          overflow: "hidden",
+                        }}
                       >
-                        {/* Loading overlay for overlayDown */}
-                        {isFileLoading && (
-                          <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-40">
-                            <div className="flex flex-col items-center gap-3">
-                              <div className="w-8 h-8 border-4 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
-                              <div className="text-sm text-gray-600 font-medium">
-                                Loading Bottom Layer...
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* PDF Preview with overlay support */}
-                        <div
-                          className={`overlay-scroll overflow-auto custom-scrollbar ${rightZoom > 100
-                            ? "h-auto"
-                            : "h-full flex justify-center items-center"
-                            }`}
+                        <canvas
+                          id="unified-overlay-canvas"
+                          className="absolute top-0 left-0 pointer-events-none"
                           style={{
-                            width: rightZoom > 100 ? "max-content" : "auto",
+                            zIndex: 10,
+                            width: rightZoom > 100 ? "max-content" : "100%",
+                            height: rightZoom > 100 ? "max-content" : "100%",
+                            minWidth: "100%",
+                            minHeight: "100%",
                           }}
-                        >
-                          <OverlayPDFPreview
-                            file={file}
-                            pageNumber={selectedPageDown}
-                            isLoading={isFileLoading}
-                            onLoadSuccess={onDocumentLoadSuccess}
-                            onLoadError={onDocumentLoadError}
-                            isHealthy={pdfHealthCheck[file.id] !== false}
-                            isPasswordProtected={passwordProtectedFiles.has(
-                              file.id
-                            )}
-                            showRemoveButton={false}
-                            userZoom={rightZoom}
-                            isSinglePage={true}
-                            // Overlay props
-                            isOverlayMode={true}
-                            overlayOpacity={overlayOpacity}
-                            overlayBlendMode={overlayBlendMode}
-                            isTopLayer={false}
-                            getTotalOverlayFilesCount={getTotalOverlayFilesCount}
-                            showDifferences={showDifferences}
-                            highlightColor={highlightColor}
-                            overlayComparison={overlayComparison}
-                            style={{
-                              border: "none",
-                              borderRadius: "0px",
-                              boxShadow: "none",
-                              height: "100%",
-                              width: "100%",
-                            }}
-                          />
-                        </div>
+                        />
                       </div>
-                    );
-                  })}
-
-                  {/* Render overlayUp files (Top Layer) */}
-                  {overlayUp.map((file) => {
-                    const isFileLoading = loadingPdfs.has(file.id);
-
-                    return (
-                      <div
-                        key={`up-${file.id}`}
-                        className="overlay-layer overflow-hidden"
-                        style={{ zIndex: 2 }}
-                      >
-                        {/* Loading overlay for overlayUp */}
-                        {isFileLoading && (
-                          <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center z-40">
-                            <div className="flex flex-col items-center gap-3">
-                              <div className="w-8 h-8 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
-                              <div className="text-sm text-gray-600 font-medium">
-                                Loading Top Layer...
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* PDF Preview with overlay support */}
-                        <div
-                          className={`overlay-scroll overflow-auto custom-scrollbar ${rightZoom > 100
-                            ? "h-auto"
-                            : "h-full flex justify-center items-center"
-                            }`}
-                          style={{
-                            width: rightZoom > 100 ? "max-content" : "auto",
-                          }}
-                        >
-                          <OverlayPDFPreview
-                            file={file}
-                            pageNumber={selectedPageUp}
-                            isLoading={isFileLoading}
-                            onLoadSuccess={onDocumentLoadSuccess}
-                            onLoadError={onDocumentLoadError}
-                            isHealthy={pdfHealthCheck[file.id] !== false}
-                            isPasswordProtected={passwordProtectedFiles.has(
-                              file.id
-                            )}
-                            showRemoveButton={false}
-                            userZoom={rightZoom}
-                            isSinglePage={true}
-                            // Overlay props
-                            isOverlayMode={true}
-                            overlayOpacity={overlayOpacity}
-                            overlayBlendMode={overlayBlendMode}
-                            getTotalOverlayFilesCount={getTotalOverlayFilesCount}
-                            isTopLayer={true}
-                            showDifferences={showDifferences}
-                            highlightColor={highlightColor}
-                            overlayComparison={overlayComparison}
-                            style={{
-                              border: "none",
-                              borderRadius: "0px",
-                              boxShadow: "none",
-                              height: "100%",
-                              width: "100%",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                    )}
 
                   {/* No files message */}
                   {overlayDown.length === 0 && overlayUp.length === 0 && (

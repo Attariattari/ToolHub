@@ -328,7 +328,7 @@ function SidebarContent({
                       {overlayUp?.length > 0 && (
                         <input
                           type="number"
-                          value={selectedPageUp}
+                          value={selectedPageUp === 0 ? "" : selectedPageUp} // Empty string when 0
                           min="1"
                           max={
                             overlayUp?.length > 0
@@ -338,7 +338,21 @@ function SidebarContent({
                           className="w-full text-sm border border-red-100 rounded-lg px-3 py-2 bg-white focus:border-red-600 focus:ring-2 focus:ring-red-100 transition-all duration-200 outline-none"
                           placeholder="Page number"
                           onChange={(e) => {
-                            const value = parseInt(e.target.value) || 1;
+                            const inputValue = e.target.value;
+
+                            // If input is empty, set to 0 (which will show as empty)
+                            if (inputValue === "" || inputValue === null) {
+                              setSelectedPageUp(0);
+                              return;
+                            }
+
+                            const value = parseInt(inputValue);
+
+                            // If not a valid number, don't update
+                            if (isNaN(value)) {
+                              return;
+                            }
+
                             const maxPages =
                               overlayUp?.length > 0
                                 ? overlayUp[0]?.numPages || 1
@@ -347,9 +361,15 @@ function SidebarContent({
                             if (value > maxPages) {
                               setSelectedPageUp(maxPages);
                             } else if (value < 1) {
-                              setSelectedPageUp(1);
+                              setSelectedPageUp(0); // Allow 0 for empty state
                             } else {
                               setSelectedPageUp(value);
+                            }
+                          }}
+                          onBlur={(e) => {
+                            // When user leaves the input, if it's empty or 0, set to 1
+                            if (selectedPageUp === 0 || e.target.value === "") {
+                              setSelectedPageUp(1);
                             }
                           }}
                         />
@@ -441,7 +461,7 @@ function SidebarContent({
                       {overlayDown?.length > 0 && (
                         <input
                           type="number"
-                          value={selectedPageDown}
+                          value={selectedPageDown === 0 ? "" : selectedPageDown} // Empty string when 0
                           min="1"
                           max={
                             overlayDown?.length > 0
@@ -451,7 +471,21 @@ function SidebarContent({
                           className="w-full text-sm border border-red-100 rounded-lg px-3 py-2 bg-white focus:border-red-600 focus:ring-2 focus:ring-red-100 transition-all duration-200 outline-none"
                           placeholder="Page number"
                           onChange={(e) => {
-                            const value = parseInt(e.target.value) || 1;
+                            const inputValue = e.target.value;
+
+                            // If input is empty, set to 0 (which will show as empty)
+                            if (inputValue === "" || inputValue === null) {
+                              setSelectedPageDown(0);
+                              return;
+                            }
+
+                            const value = parseInt(inputValue);
+
+                            // If not a valid number, don't update
+                            if (isNaN(value)) {
+                              return;
+                            }
+
                             const maxPages =
                               overlayDown?.length > 0
                                 ? overlayDown[0]?.numPages || 1
@@ -460,9 +494,18 @@ function SidebarContent({
                             if (value > maxPages) {
                               setSelectedPageDown(maxPages);
                             } else if (value < 1) {
-                              setSelectedPageDown(1);
+                              setSelectedPageDown(0); // Allow 0 for empty state
                             } else {
                               setSelectedPageDown(value);
+                            }
+                          }}
+                          onBlur={(e) => {
+                            // When user leaves the input, if it's empty or 0, set to 1
+                            if (
+                              selectedPageDown === 0 ||
+                              e.target.value === ""
+                            ) {
+                              setSelectedPageDown(1);
                             }
                           }}
                         />
