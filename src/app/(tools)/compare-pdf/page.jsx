@@ -31,79 +31,839 @@ import PDFComaprePreview from "@/components/sections/PDFComaprePreview";
 import SidebarContent from "@/components/sections/SidebarContent";
 import OverlayPDFPreview from "@/components/sections/OverlayPDFPreview";
 import PDFPreview from "@/components/sections/PDFPreview";
+
 // PDF.js worker setup
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
-// Custom text processing utilities (replacing natural.js)
+// Enhanced text processing utilities
 const textUtils = {
-  // Simple sentence tokenizer
   tokenizeSentences: (text) => {
     if (!text) return [];
     return text
-      .split(/[.!?]+/)
+      .split(/[.!?]+(?:\s+|$)/)
       .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+      .filter((s) => s.length > 5);
   },
 
-  // Simple word tokenizer
   tokenizeWords: (text) => {
     if (!text) return [];
     return text
       .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
+      .replace(/[^\w\s\-']/g, " ")
       .split(/\s+/)
-      .filter((word) => word.length > 0);
+      .filter((word) => word.length > 2);
   },
 
-  // Simple Levenshtein distance calculation
-  levenshteinDistance: (str1, str2) => {
+  levenshteinDistance: (str1, str2, maxDistance = Infinity) => {
+    if (str1 === str2) return 0;
+    if (str1.length === 0) return str2.length;
+    if (str2.length === 0) return str1.length;
+
+    if (Math.abs(str1.length - str2.length) > maxDistance) {
+      return maxDistance + 1;
+    }
+
     const matrix = [];
-    const len1 = str1.length;
-    const len2 = str2.length;
-
-    if (len1 === 0) return len2;
-    if (len2 === 0) return len1;
-
-    // Initialize matrix
-    for (let i = 0; i <= len1; i++) {
+    for (let i = 0; i <= str1.length; i++) {
       matrix[i] = [i];
     }
-    for (let j = 0; j <= len2; j++) {
+    for (let j = 0; j <= str2.length; j++) {
       matrix[0][j] = j;
     }
 
-    // Fill matrix
-    for (let i = 1; i <= len1; i++) {
-      for (let j = 1; j <= len2; j++) {
+    for (let i = 1; i <= str1.length; i++) {
+      for (let j = 1; j <= str2.length; j++) {
         const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
         matrix[i][j] = Math.min(
-          matrix[i - 1][j] + 1, // deletion
-          matrix[i][j - 1] + 1, // insertion
-          matrix[i - 1][j - 1] + cost // substitution
+          matrix[i - 1][j] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j - 1] + cost
         );
       }
     }
-
-    return matrix[len1][len2];
+    return matrix[str1.length][str2.length];
   },
 
-  // Generate n-grams (phrases)
   getNGrams: (tokens, n = 3) => {
     if (!tokens || tokens.length < n) return [];
     const ngrams = [];
     for (let i = 0; i <= tokens.length - n; i++) {
-      ngrams.push(tokens.slice(i, i + n).join(" "));
+      const ngram = tokens.slice(i, i + n).join(" ");
+      if (ngram.length > 10) {
+        ngrams.push(ngram);
+      }
     }
     return ngrams;
   },
 
-  // Calculate Jaccard similarity
-  jaccardSimilarity: (set1, set2) => {
-    const intersection = new Set([...set1].filter((x) => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    return union.size === 0 ? 0 : (intersection.size / union.size) * 100;
+  calculateSimilarity: (text1, text2) => {
+    const words1 = new Set(textUtils.tokenizeWords(text1));
+    const words2 = new Set(textUtils.tokenizeWords(text2));
+
+    const intersection = new Set([...words1].filter((x) => words2.has(x)));
+    const union = new Set([...words1, ...words2]);
+
+    const jaccard =
+      union.size === 0 ? 0 : (intersection.size / union.size) * 100;
+
+    const maxLen = Math.max(text1.length, text2.length);
+    const levDistance = textUtils.levenshteinDistance(
+      text1,
+      text2,
+      maxLen * 0.8
+    );
+    const levSimilarity =
+      maxLen === 0 ? 100 : ((maxLen - levDistance) / maxLen) * 100;
+
+    return {
+      jaccard: Math.round(jaccard),
+      levenshtein: Math.round(levSimilarity),
+      overall: Math.round((jaccard + levSimilarity) / 2),
+    };
   },
 };
+
+// Enhanced comparison engine
+class PDFComparisonEngine {
+  constructor() {
+    this.cache = new Map();
+    this.progressCallback = null;
+  }
+
+  setProgressCallback(callback) {
+    this.progressCallback = callback;
+  }
+
+  updateProgress(progress, task) {
+    if (this.progressCallback) {
+      this.progressCallback(Math.min(100, Math.max(0, progress)), task);
+    }
+  }
+
+  async extractTextFromPDFWithProgress(file, onProgress) {
+    try {
+      const cacheKey = `${file.name}_${file.size}_${file.lastModified}`;
+      if (this.cache.has(cacheKey)) {
+        return this.cache.get(cacheKey);
+      }
+
+      this.updateProgress(0, `Reading ${file.name}...`);
+      const arrayBuffer = await file.file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+
+      let totalText = "";
+      let pageAnalysis = [];
+      let textBasedPages = 0;
+      let imageBasedPages = 0;
+      const totalPages = pdf.numPages;
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+
+        const textItems = textContent.items
+          .filter((item) => item.str && item.str.trim().length > 0)
+          .map((item) => ({
+            text: item.str.trim(),
+            y: item.transform[5],
+            x: item.transform[4],
+            fontSize: item.transform[0] || 12,
+          }))
+          .sort((a, b) => b.y - a.y || a.x - b.x);
+
+        let pageText = "";
+        let currentLine = "";
+        let lastY = null;
+
+        textItems.forEach((item) => {
+          const yPos = Math.round(item.y);
+
+          if (lastY !== null && Math.abs(yPos - lastY) > 5) {
+            if (currentLine.trim()) {
+              pageText += currentLine.trim() + " ";
+              currentLine = "";
+            }
+          }
+
+          currentLine += item.text + " ";
+          lastY = yPos;
+        });
+
+        if (currentLine.trim()) {
+          pageText += currentLine.trim();
+        }
+
+        const hasText = pageText.length > 50 && textItems.length > 5;
+
+        if (hasText) {
+          textBasedPages++;
+          const cleanPageText = pageText
+            .replace(/\s+/g, " ")
+            .replace(/[^\w\s.,!?;:()\-'"/\\]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+          totalText += cleanPageText + "\n\n";
+        } else {
+          imageBasedPages++;
+        }
+
+        pageAnalysis.push({
+          pageNumber: pageNum,
+          hasText,
+          textLength: pageText.length,
+          text: pageText,
+          itemCount: textItems.length,
+          avgFontSize:
+            textItems.length > 0
+              ? textItems.reduce((sum, item) => sum + item.fontSize, 0) /
+                textItems.length
+              : 12,
+        });
+
+        const progress = (pageNum / totalPages) * 50;
+        this.updateProgress(
+          progress,
+          `Processing page ${pageNum}/${totalPages}...`
+        );
+      }
+
+      const finalText = totalText.trim();
+      const wordCount = textUtils.tokenizeWords(finalText).length;
+
+      const result = {
+        fileName: file.name,
+        totalPages,
+        textBasedPages,
+        imageBasedPages,
+        totalText: finalText,
+        pageAnalysis,
+        fileType:
+          textBasedPages > imageBasedPages ? "text-based" : "image-based",
+        confidence: Math.round(
+          (Math.max(textBasedPages, imageBasedPages) / totalPages) * 100
+        ),
+        wordCount,
+        charCount: finalText.length,
+        avgWordsPerPage: Math.round(wordCount / Math.max(textBasedPages, 1)),
+        extractionQuality:
+          textBasedPages > totalPages * 0.8
+            ? "high"
+            : textBasedPages > totalPages * 0.5
+            ? "medium"
+            : "low",
+      };
+
+      this.cache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error("Error extracting text from PDF:", error);
+      throw new Error(
+        `Failed to extract text from ${file.name}: ${error.message}`
+      );
+    }
+  }
+
+  async performDeepTextComparison(leftAnalysis, rightAnalysis) {
+    if (!leftAnalysis?.totalText || !rightAnalysis?.totalText) {
+      throw new Error("Invalid text analysis data");
+    }
+
+    this.updateProgress(50, "Performing deep comparison...");
+
+    const leftText = leftAnalysis.totalText.toLowerCase();
+    const rightText = rightAnalysis.totalText.toLowerCase();
+
+    this.updateProgress(60, "Analyzing differences...");
+    const charDiff = Diff.diffChars(leftText, rightText);
+    const wordDiff = Diff.diffWords(leftText, rightText, {
+      ignoreCase: true,
+      ignoreWhitespace: false,
+    });
+    const lineDiff = Diff.diffLines(leftText, rightText, {
+      ignoreWhitespace: true,
+      newlineIsToken: true,
+    });
+
+    this.updateProgress(80, "Calculating similarity...");
+    const similarity = textUtils.calculateSimilarity(leftText, rightText);
+
+    const leftSentences = textUtils.tokenizeSentences(leftText);
+    const rightSentences = textUtils.tokenizeSentences(rightText);
+    const sentenceDiff = Diff.diffArrays(leftSentences, rightSentences);
+
+    const leftWords = textUtils.tokenizeWords(leftText);
+    const rightWords = textUtils.tokenizeWords(rightText);
+
+    const leftTrigrams = textUtils.getNGrams(leftWords, 3);
+    const rightTrigrams = textUtils.getNGrams(rightWords, 3);
+    const leftBigrams = textUtils.getNGrams(leftWords, 2);
+    const rightBigrams = textUtils.getNGrams(rightWords, 2);
+
+    const commonTrigrams = leftTrigrams.filter((phrase) =>
+      rightTrigrams.includes(phrase)
+    );
+    const commonBigrams = leftBigrams.filter((phrase) =>
+      rightBigrams.includes(phrase)
+    );
+
+    let addedCount = 0;
+    let removedCount = 0;
+    let unchangedCount = 0;
+    let addedChars = 0;
+    let removedChars = 0;
+
+    wordDiff.forEach((part) => {
+      const wordCount = textUtils.tokenizeWords(part.value).length;
+      const charCount = part.value.length;
+
+      if (part.added) {
+        addedCount += wordCount;
+        addedChars += charCount;
+      } else if (part.removed) {
+        removedCount += wordCount;
+        removedChars += charCount;
+      } else {
+        unchangedCount += wordCount;
+      }
+    });
+
+    const totalWords = addedCount + removedCount + unchangedCount;
+    const changePercentage =
+      totalWords > 0 ? ((addedCount + removedCount) / totalWords) * 100 : 0;
+
+    const structuralChanges = {
+      pageCountChange: Math.abs(
+        leftAnalysis.totalPages - rightAnalysis.totalPages
+      ),
+      wordCountChange: Math.abs(
+        leftAnalysis.wordCount - rightAnalysis.wordCount
+      ),
+      charCountChange: Math.abs(
+        leftAnalysis.charCount - rightAnalysis.charCount
+      ),
+      wordCountChangePercent:
+        leftAnalysis.wordCount > 0
+          ? ((rightAnalysis.wordCount - leftAnalysis.wordCount) /
+              leftAnalysis.wordCount) *
+            100
+          : 0,
+    };
+
+    this.updateProgress(100, "Finalizing comparison...");
+
+    return {
+      similarity: {
+        ...similarity,
+        structural: Math.max(
+          0,
+          100 - Math.abs(structuralChanges.wordCountChangePercent) * 2
+        ),
+      },
+      changes: {
+        added: addedCount,
+        removed: removedCount,
+        unchanged: unchangedCount,
+        addedChars,
+        removedChars,
+        changePercentage: Math.round(changePercentage),
+        significantChanges: changePercentage > 5,
+      },
+      structural: structuralChanges,
+      commonPhrases: {
+        trigrams: [...new Set(commonTrigrams)].slice(0, 20),
+        bigrams: [...new Set(commonBigrams)].slice(0, 30),
+      },
+      diffs: {
+        wordDiff: wordDiff.slice(0, 200),
+        sentenceDiff: sentenceDiff.slice(0, 50),
+        lineDiff: lineDiff.slice(0, 100),
+        charDiff: charDiff.slice(0, 500),
+      },
+      metadata: {
+        leftWordCount: leftAnalysis.wordCount,
+        rightWordCount: rightAnalysis.wordCount,
+        leftCharCount: leftAnalysis.charCount,
+        rightCharCount: rightAnalysis.charCount,
+        fileTypes: {
+          left: leftAnalysis.fileType,
+          right: rightAnalysis.fileType,
+        },
+        quality: {
+          left: leftAnalysis.extractionQuality,
+          right: rightAnalysis.extractionQuality,
+        },
+      },
+      analysisDepth: "deep",
+      timestamp: new Date().toISOString(),
+      requiresOCR: false,
+    };
+  }
+
+  async extractTextItemsWithCoordinatesEnhanced(file) {
+    try {
+      const arrayBuffer = await file.file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      const allTextItems = [];
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const viewport = page.getViewport({ scale: 1 });
+
+        const lineGroups = new Map();
+
+        textContent.items.forEach((item, index) => {
+          if (!item.str || item.str.trim().length === 0) return;
+
+          const y = Math.round(viewport.height - item.transform[5]);
+          const fontSize = Math.round(item.transform[0] || 12);
+
+          const tolerance = Math.max(fontSize * 0.3, 3);
+          let lineKey = null;
+
+          for (const [key] of lineGroups) {
+            if (Math.abs(y - key) <= tolerance) {
+              lineKey = key;
+              break;
+            }
+          }
+
+          if (lineKey === null) {
+            lineKey = y;
+            lineGroups.set(lineKey, []);
+          }
+
+          lineGroups.get(lineKey).push({
+            pageNumber: pageNum,
+            text: item.str.trim(),
+            x: Math.round(item.transform[4]),
+            y: y,
+            width: Math.round(item.width || item.str.length * (fontSize * 0.6)),
+            height: Math.round(item.height || fontSize + 2),
+            fontSize: fontSize,
+            pdfWidth: viewport.width,
+            pdfHeight: viewport.height,
+            originalIndex: index,
+            transform: [...item.transform],
+          });
+        });
+
+        const sortedLines = Array.from(lineGroups.entries()).sort(
+          (a, b) => b[0] - a[0]
+        );
+
+        sortedLines.forEach(([lineY, line], lineIndex) => {
+          line.sort((a, b) => a.x - b.x);
+
+          line.forEach((item, itemIndex) => {
+            allTextItems.push({
+              ...item,
+              lineIndex,
+              itemIndex,
+              lineText: line.map((i) => i.text).join(" "),
+              uniqueId: `${pageNum}-${lineIndex}-${itemIndex}`,
+              confidence: this.calculateItemConfidence(item, line),
+            });
+          });
+        });
+      }
+
+      return allTextItems;
+    } catch (error) {
+      console.error("Error in enhanced text extraction:", error);
+      return [];
+    }
+  }
+
+  calculateItemConfidence(item, line) {
+    let confidence = 0.8;
+
+    if (item.fontSize > 14) confidence += 0.1;
+    if (item.fontSize > 18) confidence += 0.1;
+    if (item.text.length > 10) confidence += 0.05;
+    if (item.text.length > 20) confidence += 0.05;
+    if (line.length > 3) confidence += 0.05;
+    if (item.text.length < 3) confidence -= 0.2;
+    if (!/[a-zA-Z0-9]/.test(item.text)) confidence -= 0.3;
+
+    return Math.max(0.1, Math.min(1.0, confidence));
+  }
+
+  async generatePreciseHighlights(
+    comparisonResult,
+    leftAnalysis,
+    rightAnalysis,
+    leftFile,
+    rightFile
+  ) {
+    if (!comparisonResult?.diffs?.wordDiff || !leftAnalysis || !rightAnalysis) {
+      throw new Error("Invalid comparison data for highlight generation");
+    }
+
+    try {
+      this.updateProgress(0, "Generating highlights...");
+
+      const [leftTextItems, rightTextItems] = await Promise.all([
+        this.extractTextItemsWithCoordinatesEnhanced(leftFile),
+        this.extractTextItemsWithCoordinatesEnhanced(rightFile),
+      ]);
+
+      this.updateProgress(30, "Processing differences...");
+
+      const leftDifferences = [];
+      const rightDifferences = [];
+      let leftSearchIndex = 0;
+      let rightSearchIndex = 0;
+
+      const wordDiff = comparisonResult.diffs.wordDiff;
+      const totalParts = wordDiff.length;
+
+      for (let partIndex = 0; partIndex < totalParts; partIndex++) {
+        const part = wordDiff[partIndex];
+
+        if (!part.value || part.value.trim().length === 0) continue;
+
+        const cleanText = part.value.trim().replace(/\s+/g, " ");
+        const textChunks = this.createSmartTextChunks(cleanText);
+
+        if (part.removed) {
+          for (const chunk of textChunks) {
+            const matches = this.findMultipleTextMatches(
+              leftTextItems,
+              chunk.text,
+              leftSearchIndex,
+              0.6
+            );
+
+            for (const match of matches.slice(0, 3)) {
+              leftDifferences.push({
+                pageNumber: match.pageNumber,
+                x: match.x,
+                y: match.y,
+                width: Math.max(match.width, chunk.text.length * 7),
+                height: Math.max(match.height, match.fontSize + 4),
+                originalPdfWidth: match.pdfWidth,
+                originalPdfHeight: match.pdfHeight,
+                text: chunk.text,
+                type: "removed",
+                confidence: match.matchScore,
+                matchType: match.matchType,
+                chunkType: chunk.type,
+                id: `left-${partIndex}-${chunk.id}`,
+              });
+            }
+
+            if (matches.length > 0) {
+              leftSearchIndex = Math.min(
+                leftTextItems.findIndex(
+                  (item) => item.uniqueId === matches[0].uniqueId
+                ) + 1,
+                leftTextItems.length - 1
+              );
+            }
+          }
+        } else if (part.added) {
+          for (const chunk of textChunks) {
+            const matches = this.findMultipleTextMatches(
+              rightTextItems,
+              chunk.text,
+              rightSearchIndex,
+              0.6
+            );
+
+            for (const match of matches.slice(0, 3)) {
+              rightDifferences.push({
+                pageNumber: match.pageNumber,
+                x: match.x,
+                y: match.y,
+                width: Math.max(match.width, chunk.text.length * 7),
+                height: Math.max(match.height, match.fontSize + 4),
+                originalPdfWidth: match.pdfWidth,
+                originalPdfHeight: match.pdfHeight,
+                text: chunk.text,
+                type: "added",
+                confidence: match.matchScore,
+                matchType: match.matchType,
+                chunkType: chunk.type,
+                id: `right-${partIndex}-${chunk.id}`,
+              });
+            }
+
+            if (matches.length > 0) {
+              rightSearchIndex = Math.min(
+                rightTextItems.findIndex(
+                  (item) => item.uniqueId === matches[0].uniqueId
+                ) + 1,
+                rightTextItems.length - 1
+              );
+            }
+          }
+        } else {
+          const advanceBy = Math.min(Math.max(textChunks.length, 2), 10);
+          leftSearchIndex = Math.min(
+            leftSearchIndex + advanceBy,
+            leftTextItems.length - 1
+          );
+          rightSearchIndex = Math.min(
+            rightSearchIndex + advanceBy,
+            rightTextItems.length - 1
+          );
+        }
+
+        const progress = ((partIndex + 1) / totalParts) * 50 + 30;
+        this.updateProgress(
+          Math.min(80, progress),
+          `Processing differences... ${partIndex + 1}/${totalParts}`
+        );
+      }
+
+      this.updateProgress(85, "Filtering highlights...");
+
+      const uniqueLeftDifferences =
+        this.deduplicateAndFilterHighlights(leftDifferences);
+      const uniqueRightDifferences =
+        this.deduplicateAndFilterHighlights(rightDifferences);
+
+      uniqueLeftDifferences.sort(
+        (a, b) => a.pageNumber - b.pageNumber || a.y - b.y || a.x - b.x
+      );
+      uniqueRightDifferences.sort(
+        (a, b) => a.pageNumber - b.pageNumber || a.y - b.y || a.x - b.x
+      );
+
+      this.updateProgress(100, "Highlights generated!");
+
+      return {
+        leftDifferences: uniqueLeftDifferences,
+        rightDifferences: uniqueRightDifferences,
+        stats: {
+          totalProcessedParts: totalParts,
+          leftHighlights: uniqueLeftDifferences.length,
+          rightHighlights: uniqueRightDifferences.length,
+          averageConfidence: {
+            left:
+              uniqueLeftDifferences.length > 0
+                ? uniqueLeftDifferences.reduce(
+                    (sum, diff) => sum + (diff.confidence || 0.8),
+                    0
+                  ) / uniqueLeftDifferences.length
+                : 0,
+            right:
+              uniqueRightDifferences.length > 0
+                ? uniqueRightDifferences.reduce(
+                    (sum, diff) => sum + (diff.confidence || 0.8),
+                    0
+                  ) / uniqueRightDifferences.length
+                : 0,
+          },
+        },
+      };
+    } catch (error) {
+      console.error("Error generating precise highlights:", error);
+      return { leftDifferences: [], rightDifferences: [] };
+    }
+  }
+
+  createSmartTextChunks(text) {
+    if (!text || text.length < 2) return [];
+
+    const chunks = [];
+    const sentences = textUtils.tokenizeSentences(text);
+
+    if (sentences.length > 1) {
+      sentences.forEach((sentence, index) => {
+        if (sentence.length > 10) {
+          chunks.push({
+            text: sentence,
+            type: "sentence",
+            id: `sent-${index}`,
+            priority: 1,
+          });
+        }
+      });
+    }
+
+    const words = textUtils.tokenizeWords(text);
+    if (words.length > 2) {
+      for (let i = 0; i < words.length - 2; i++) {
+        const phraseLength = Math.min(8, words.length - i);
+        for (let len = 3; len <= phraseLength; len++) {
+          const phrase = words.slice(i, i + len).join(" ");
+          if (phrase.length > 15) {
+            chunks.push({
+              text: phrase,
+              type: "phrase",
+              id: `phrase-${i}-${len}`,
+              priority: len > 5 ? 2 : 3,
+            });
+          }
+        }
+      }
+    }
+
+    const significantWords = words.filter((word) => word.length > 4);
+    significantWords.forEach((word, index) => {
+      chunks.push({
+        text: word,
+        type: "word",
+        id: `word-${index}`,
+        priority: 4,
+      });
+    });
+
+    const uniqueChunks = Array.from(
+      new Map(chunks.map((chunk) => [chunk.text.toLowerCase(), chunk])).values()
+    );
+
+    return uniqueChunks.sort((a, b) => a.priority - b.priority).slice(0, 20);
+  }
+
+  findMultipleTextMatches(
+    textItems,
+    searchText,
+    startIndex = 0,
+    minScore = 0.7
+  ) {
+    if (!searchText || searchText.length < 2) return [];
+
+    const searchLower = searchText.toLowerCase().trim();
+    const searchWords = textUtils.tokenizeWords(searchLower);
+    const matches = [];
+
+    for (let i = startIndex; i < textItems.length && matches.length < 5; i++) {
+      const item = textItems[i];
+      const itemText = item.text.toLowerCase().trim();
+      const itemWords = textUtils.tokenizeWords(itemText);
+
+      let bestScore = 0;
+      let matchType = "";
+
+      if (itemText.includes(searchLower)) {
+        bestScore = Math.max(bestScore, 0.95);
+        matchType = "contains";
+      } else if (searchLower.includes(itemText) && itemText.length > 3) {
+        bestScore = Math.max(bestScore, 0.85);
+        matchType = "contained";
+      }
+
+      if (itemText === searchLower) {
+        bestScore = 1.0;
+        matchType = "exact";
+      }
+
+      if (searchWords.length > 0 && itemWords.length > 0) {
+        const commonWords = searchWords.filter((word) =>
+          itemWords.some((itemWord) => {
+            if (itemWord === word) return true;
+            if (word.length > 4 && itemWord.includes(word)) return true;
+            if (itemWord.length > 4 && word.includes(itemWord)) return true;
+            return (
+              textUtils.levenshteinDistance(word, itemWord) <= 1 &&
+              word.length > 3
+            );
+          })
+        );
+
+        const wordScore =
+          commonWords.length / Math.max(searchWords.length, itemWords.length);
+        if (wordScore > bestScore && wordScore >= 0.5) {
+          bestScore = wordScore;
+          matchType = "word-based";
+        }
+      }
+
+      if (searchText.length > 6 && itemText.length > 6) {
+        const maxDistance = Math.max(2, Math.min(searchText.length * 0.3, 8));
+        const distance = textUtils.levenshteinDistance(
+          searchLower,
+          itemText,
+          maxDistance
+        );
+
+        if (distance <= maxDistance) {
+          const maxLen = Math.max(searchLower.length, itemText.length);
+          const fuzzyScore = (maxLen - distance) / maxLen;
+
+          if (fuzzyScore > bestScore && fuzzyScore >= 0.6) {
+            bestScore = fuzzyScore;
+            matchType = "fuzzy";
+          }
+        }
+      }
+
+      if (bestScore >= minScore) {
+        matches.push({
+          ...item,
+          matchScore: bestScore,
+          matchType,
+          searchDistance: i - startIndex,
+        });
+      }
+    }
+
+    return matches.sort((a, b) => {
+      if (Math.abs(a.matchScore - b.matchScore) > 0.1) {
+        return b.matchScore - a.matchScore;
+      }
+      return a.searchDistance - b.searchDistance;
+    });
+  }
+
+  deduplicateAndFilterHighlights(highlights) {
+    if (!highlights || highlights.length === 0) return [];
+
+    const pageGroups = {};
+    highlights.forEach((highlight) => {
+      if (!pageGroups[highlight.pageNumber]) {
+        pageGroups[highlight.pageNumber] = [];
+      }
+      pageGroups[highlight.pageNumber].push(highlight);
+    });
+
+    const filteredHighlights = [];
+
+    Object.keys(pageGroups).forEach((pageNum) => {
+      const pageHighlights = pageGroups[pageNum];
+
+      pageHighlights.sort((a, b) => {
+        const confDiff = (b.confidence || 0.8) - (a.confidence || 0.8);
+        if (Math.abs(confDiff) > 0.1) return confDiff;
+        return a.y - b.y || a.x - b.x;
+      });
+
+      const uniqueHighlights = [];
+
+      pageHighlights.forEach((highlight) => {
+        const isDuplicate = uniqueHighlights.some((existing) => {
+          const positionOverlap =
+            Math.abs(existing.x - highlight.x) < 20 &&
+            Math.abs(existing.y - highlight.y) < 10;
+
+          const textSimilar =
+            existing.text.toLowerCase() === highlight.text.toLowerCase() ||
+            existing.text.includes(highlight.text) ||
+            highlight.text.includes(existing.text);
+
+          return positionOverlap && textSimilar;
+        });
+
+        if (!isDuplicate && (highlight.confidence || 0.8) >= 0.4) {
+          if (
+            highlight.text.length >= 2 &&
+            highlight.width >= 5 &&
+            highlight.height >= 5
+          ) {
+            uniqueHighlights.push(highlight);
+          }
+        }
+      });
+
+      filteredHighlights.push(...uniqueHighlights);
+    });
+
+    return filteredHighlights;
+  }
+}
 
 export default function comparepdf() {
   // 📦 State: File Uploading & PDF Handling
@@ -147,6 +907,8 @@ export default function comparepdf() {
   const [comparisonResult, setComparisonResult] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showComparisonResults, setShowComparisonResults] = useState(false);
+  const [currentTask, setCurrentTask] = useState("");
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   // Overlay-specific states (separate from semantic)
   const [selectedPageDown, setSelectedPageDown] = useState(1);
   const [selectedPageUp, setSelectedPageUp] = useState(1);
@@ -161,7 +923,11 @@ export default function comparepdf() {
   const [showDifferences, setShowDifferences] = useState(false);
   const [highlightColor, setHighlightColor] = useState("#ff0000");
   const [differenceThreshold, setDifferenceThreshold] = useState(30);
-
+  // NEW: Highlighting States
+  const [comparisonComplete, setComparisonComplete] = useState(false);
+  const [showHighlights, setShowHighlights] = useState(true);
+  const [leftDifferences, setLeftDifferences] = useState([]);
+  const [rightDifferences, setRightDifferences] = useState([]);
   // UI states
   const [showControls, setShowControls] = useState(true);
   const [showAnalysisReport, setShowAnalysisReport] = useState(false);
@@ -171,6 +937,26 @@ export default function comparepdf() {
   const topLayerRef = useRef(null);
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
+  const comparisonEngine = useRef(null);
+
+  // Initialize comparison engine properly - FIXED
+  useEffect(() => {
+    // Create the comparison engine instance
+    comparisonEngine.current = new PDFComparisonEngine();
+
+    // Set the progress callback
+    comparisonEngine.current.setProgressCallback((progress, task) => {
+      setAnalysisProgress(progress);
+      setCurrentTask(task);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      if (comparisonEngine.current) {
+        comparisonEngine.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const savedOption = localStorage.getItem("selectedOption");
@@ -179,184 +965,6 @@ export default function comparepdf() {
     }
   }, []);
 
-  // NEW: Text Extraction and Analysis Functions
-  const extractTextFromPDF = async (file) => {
-    try {
-      const arrayBuffer = await file.file.arrayBuffer();
-      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-
-      let totalText = "";
-      let pageAnalysis = [];
-      let textBasedPages = 0;
-      let imageBasedPages = 0;
-
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-
-        // Extract text from page
-        const pageText = textContent.items
-          .map((item) => item.str)
-          .join(" ")
-          .trim();
-
-        // Check if page has meaningful text content
-        const hasText = pageText.length > 50; // Minimum threshold
-
-        if (hasText) {
-          textBasedPages++;
-          totalText += pageText + "\n\n";
-        } else {
-          imageBasedPages++;
-        }
-
-        pageAnalysis.push({
-          pageNumber: pageNum,
-          hasText,
-          textLength: pageText.length,
-          text: pageText,
-        });
-      }
-
-      // Clean and normalize text
-      const cleanedText = totalText
-        .replace(/\s+/g, " ")
-        .replace(/[^\w\s.,!?;:()\-]/g, "")
-        .trim();
-
-      return {
-        fileName: file.name,
-        totalPages: pdf.numPages,
-        textBasedPages,
-        imageBasedPages,
-        totalText: cleanedText,
-        pageAnalysis,
-        fileType:
-          textBasedPages > imageBasedPages ? "text-based" : "image-based",
-        confidence: Math.round(
-          (Math.max(textBasedPages, imageBasedPages) / pdf.numPages) * 100
-        ),
-        wordCount: cleanedText.split(/\s+/).filter((word) => word.length > 0)
-          .length,
-        charCount: cleanedText.length,
-      };
-    } catch (error) {
-      console.error("Error extracting text from PDF:", error);
-      throw new Error(
-        `Failed to extract text from ${file.name}: ${error.message}`
-      );
-    }
-  };
-
-  // NEW: Advanced Text Comparison Function (using custom utilities)
-  const performTextComparison = (leftAnalysis, rightAnalysis) => {
-    if (!leftAnalysis?.totalText || !rightAnalysis?.totalText) {
-      return null;
-    }
-
-    const leftText = leftAnalysis.totalText.toLowerCase();
-    const rightText = rightAnalysis.totalText.toLowerCase();
-
-    // 1. Character-level diff using diff library
-    const charDiff = Diff.diffChars(leftText, rightText);
-
-    // 2. Word-level diff
-    const wordDiff = Diff.diffWords(leftText, rightText);
-
-    // 3. Sentence-level diff using custom tokenizer
-    const leftSentences = textUtils.tokenizeSentences(leftText);
-    const rightSentences = textUtils.tokenizeSentences(rightText);
-    const sentenceDiff = Diff.diffArrays(leftSentences, rightSentences);
-
-    // 4. Calculate similarity metrics using custom utilities
-    const leftWords = new Set(
-      textUtils.tokenizeWords(leftText).filter((word) => word.length > 2)
-    );
-    const rightWords = new Set(
-      textUtils.tokenizeWords(rightText).filter((word) => word.length > 2)
-    );
-
-    const intersection = new Set(
-      [...leftWords].filter((word) => rightWords.has(word))
-    );
-    const union = new Set([...leftWords, ...rightWords]);
-
-    // Jaccard similarity using custom function
-    const jaccardSimilarity = textUtils.jaccardSimilarity(
-      leftWords,
-      rightWords
-    );
-
-    // 5. Levenshtein distance for overall similarity using custom function
-    const levenshteinDistance = textUtils.levenshteinDistance(
-      leftText,
-      rightText
-    );
-    const maxLength = Math.max(leftText.length, rightText.length);
-    const levenshteinSimilarity =
-      ((maxLength - levenshteinDistance) / maxLength) * 100;
-
-    // 6. Find common phrases using custom n-gram function
-    const leftTokens = textUtils.tokenizeWords(leftText);
-    const rightTokens = textUtils.tokenizeWords(rightText);
-
-    const leftTrigrams = textUtils.getNGrams(leftTokens, 3);
-    const rightTrigrams = textUtils.getNGrams(rightTokens, 3);
-    const commonPhrases = leftTrigrams.filter((phrase) =>
-      rightTrigrams.includes(phrase)
-    );
-
-    // 7. Analyze changes
-    let addedCount = 0;
-    let removedCount = 0;
-    let unchangedCount = 0;
-
-    wordDiff.forEach((part) => {
-      const wordCount = part.value
-        .split(/\s+/)
-        .filter((word) => word.length > 0).length;
-      if (part.added) {
-        addedCount += wordCount;
-      } else if (part.removed) {
-        removedCount += wordCount;
-      } else {
-        unchangedCount += wordCount;
-      }
-    });
-
-    // 8. Calculate change percentage
-    const totalWords = addedCount + removedCount + unchangedCount;
-    const changePercentage =
-      totalWords > 0 ? ((addedCount + removedCount) / totalWords) * 100 : 0;
-
-    return {
-      similarity: {
-        jaccard: Math.round(jaccardSimilarity),
-        levenshtein: Math.round(levenshteinSimilarity),
-        overall: Math.round((jaccardSimilarity + levenshteinSimilarity) / 2),
-      },
-      changes: {
-        added: addedCount,
-        removed: removedCount,
-        unchanged: unchangedCount,
-        changePercentage: Math.round(changePercentage),
-      },
-      commonWords: intersection.size,
-      uniqueWordsLeft: leftWords.size - intersection.size,
-      uniqueWordsRight: rightWords.size - intersection.size,
-      commonPhrases: [...new Set(commonPhrases)].slice(0, 10),
-      wordDiff: wordDiff.slice(0, 50), // Limit for performance
-      sentenceDiff: sentenceDiff.slice(0, 20),
-      leftWordCount: leftAnalysis.wordCount,
-      rightWordCount: rightAnalysis.wordCount,
-      fileTypes: {
-        left: leftAnalysis.fileType,
-        right: rightAnalysis.fileType,
-      },
-    };
-  };
-
-  // Auto comparison useEffect - ye code aapke existing useEffects ke baad add karein
   useEffect(() => {
     localStorage.setItem("selectedOption", activeOption);
   }, [activeOption]);
@@ -365,41 +973,86 @@ export default function comparepdf() {
     setActiveOption(option);
   };
 
+  // Enhanced auto-comparison effect - FIXED
   useEffect(() => {
     const shouldAutoCompare =
+      activeOption === "semantic" &&
       leftFiles.length > 0 &&
       rightFiles.length > 0 &&
       !isAnalyzing &&
-      !comparisonResult;
+      !comparisonResult &&
+      comparisonEngine.current; // Add this check
 
     if (shouldAutoCompare) {
       console.log("🚀 Auto-starting comparison...");
-
-      // Small delay add karte hain taake UI properly render ho jaye
       const timer = setTimeout(() => {
         handleCompareDocuments();
-      }, 500);
-
+      }, 800);
       return () => clearTimeout(timer);
     }
-  }, [leftFiles, rightFiles, isAnalyzing, comparisonResult]);
+  }, [leftFiles, rightFiles, isAnalyzing, comparisonResult, activeOption]);
 
-  // Optional: Reset comparison jab koi file remove ho jaye
+  // Enhanced auto-highlighting effect - FIXED
   useEffect(() => {
-    // Agar koi ek side empty ho gaya hai toh comparison reset kar do
-    if (leftFiles.length === 0 || rightFiles.length === 0) {
-      if (comparisonResult) {
-        console.log("🔄 Resetting comparison due to file removal");
-        setComparisonResult(null);
-        setLeftAnalysis(null);
-        setRightAnalysis(null);
-        setShowComparisonResults(false);
-      }
-    }
-  }, [leftFiles.length, rightFiles.length, comparisonResult]);
+    const generateHighlights = async () => {
+      if (
+        comparisonResult &&
+        !comparisonResult.requiresOCR &&
+        leftAnalysis &&
+        rightAnalysis &&
+        leftFiles.length > 0 &&
+        rightFiles.length > 0 &&
+        !comparisonComplete &&
+        comparisonEngine.current // Add this check
+      ) {
+        console.log("🎨 Auto-generating highlights...");
+        setCurrentTask("Generating highlights...");
 
-  // Enhanced handleCompareDocuments function with better error handling
-  // Progress Hook
+        try {
+          const differences =
+            await comparisonEngine.current.generatePreciseHighlights(
+              comparisonResult,
+              leftAnalysis,
+              rightAnalysis,
+              leftFiles[0],
+              rightFiles[0]
+            );
+
+          setLeftDifferences(differences.leftDifferences);
+          setRightDifferences(differences.rightDifferences);
+          setComparisonComplete(true);
+
+          console.log(
+            `✅ Generated ${
+              differences.leftDifferences.length +
+              differences.rightDifferences.length
+            } highlights`
+          );
+          toast.success(
+            `Generated ${
+              differences.leftDifferences.length +
+              differences.rightDifferences.length
+            } highlights!`
+          );
+        } catch (error) {
+          console.error("❌ Error generating highlights:", error);
+          toast.error("Failed to generate highlights");
+        } finally {
+          setCurrentTask("");
+        }
+      }
+    };
+
+    generateHighlights();
+  }, [
+    comparisonResult,
+    leftAnalysis,
+    rightAnalysis,
+    comparisonComplete,
+    leftFiles,
+    rightFiles,
+  ]);
+
   const useProgressSimulator = (isActive, duration = 5000) => {
     const [progress, setProgress] = useState(0);
     const [currentStep, setCurrentStep] = useState("");
@@ -431,7 +1084,6 @@ export default function comparepdf() {
           return;
         }
 
-        // Update current step based on progress
         const progressPerStep = 100 / steps.length;
         const newStepIndex = Math.floor(currentProgress / progressPerStep);
 
@@ -440,48 +1092,55 @@ export default function comparepdf() {
           setCurrentStep(steps[stepIndex].text);
         }
 
-        currentProgress += Math.random() * 3 + 1; // Random increment between 1-4
+        currentProgress += Math.random() * 3 + 1;
         if (currentProgress > 100) currentProgress = 100;
 
         setProgress(currentProgress);
       };
 
       interval = setInterval(updateProgress, 100);
-
       return () => clearInterval(interval);
     }, [isActive]);
 
     return { progress: Math.round(progress), currentStep };
   };
 
-  // Enhanced handleCompareDocuments function
+  // Main comparison handler - FIXED
   const handleCompareDocuments = async () => {
     if (leftFiles.length === 0 || rightFiles.length === 0) {
       toast.error("Please upload both PDF files to compare");
       return;
     }
 
-    if (isAnalyzing) {
-      console.log("⚠️ Comparison already in progress");
+    if (isAnalyzing || !comparisonEngine.current) {
+      console.log("⚠️ Comparison already in progress or engine not ready");
       return;
     }
 
+    // Reset all states
     setIsAnalyzing(true);
     setComparisonResult(null);
+    setComparisonComplete(false);
+    setLeftDifferences([]);
+    setRightDifferences([]);
+    setLeftAnalysis(null);
+    setRightAnalysis(null);
+    setAnalysisProgress(0);
+    setCurrentTask("Starting analysis...");
 
     try {
-      console.log("📊 Starting document analysis...");
+      console.log("📊 Starting enhanced document analysis...");
 
-      // Extract text from both files
+      // Extract text from both PDFs - FIXED
       const [leftResult, rightResult] = await Promise.all([
-        extractTextFromPDF(leftFiles[0]),
-        extractTextFromPDF(rightFiles[0]),
+        comparisonEngine.current.extractTextFromPDFWithProgress(leftFiles[0]),
+        comparisonEngine.current.extractTextFromPDFWithProgress(rightFiles[0]),
       ]);
 
       setLeftAnalysis(leftResult);
       setRightAnalysis(rightResult);
 
-      // Check if both files are image-based
+      // Check if OCR is needed
       const leftIsImageBased = leftResult.fileType === "image-based";
       const rightIsImageBased = rightResult.fileType === "image-based";
       const hasImageBasedFile = leftIsImageBased || rightIsImageBased;
@@ -495,34 +1154,134 @@ export default function comparepdf() {
           rightIsImageBased,
           leftAnalysis: leftResult,
           rightAnalysis: rightResult,
+          metadata: {
+            leftWordCount: leftResult.wordCount,
+            rightWordCount: rightResult.wordCount,
+            fileTypes: {
+              left: leftResult.fileType,
+              right: rightResult.fileType,
+            },
+          },
         });
 
-        setShowComparisonResults(false);
+        setShowComparisonResults(true);
         toast.warning(
           "Image-based PDF detected. OCR processing required for text comparison."
         );
         return;
       }
 
-      // Add small delay to show complete progress
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Proceed with normal text comparison for text-based PDFs
-      const comparison = performTextComparison(leftResult, rightResult);
+      // Perform deep comparison - FIXED
+      const comparison =
+        await comparisonEngine.current.performDeepTextComparison(
+          leftResult,
+          rightResult
+        );
       setComparisonResult(comparison);
 
-      console.log("✅ Comparison completed successfully");
+      console.log(
+        `✅ Analysis completed - Similarity: ${comparison.similarity.overall}%`
+      );
+      setShowComparisonResults(true);
       toast.success("Documents compared successfully!");
     } catch (error) {
       console.error("❌ Error analyzing documents:", error);
-      toast.error(`Error analyzing documents: ${error.message}`);
+      toast.error(`Analysis failed: ${error.message}`);
 
+      // Reset states on error
       setLeftAnalysis(null);
       setRightAnalysis(null);
       setComparisonResult(null);
+      setComparisonComplete(false);
     } finally {
       setIsAnalyzing(false);
+      setAnalysisProgress(0);
+      setCurrentTask("");
     }
+  };
+
+  // Manual highlight generation - FIXED
+  const handleGenerateHighlights = async () => {
+    if (
+      !comparisonResult ||
+      !leftAnalysis ||
+      !rightAnalysis ||
+      leftFiles.length === 0 ||
+      rightFiles.length === 0 ||
+      !comparisonEngine.current
+    ) {
+      toast.error("Complete comparison required before generating highlights");
+      return;
+    }
+
+    if (comparisonResult.requiresOCR) {
+      toast.error("OCR processing required before highlighting");
+      return;
+    }
+
+    try {
+      setCurrentTask("Generating highlights...");
+      console.log("🎨 Manually generating highlights...");
+
+      const differences =
+        await comparisonEngine.current.generatePreciseHighlights(
+          comparisonResult,
+          leftAnalysis,
+          rightAnalysis,
+          leftFiles[0],
+          rightFiles[0]
+        );
+
+      setLeftDifferences(differences.leftDifferences);
+      setRightDifferences(differences.rightDifferences);
+      setComparisonComplete(true);
+
+      console.log(
+        `✅ Generated ${
+          differences.leftDifferences.length +
+          differences.rightDifferences.length
+        } highlights`
+      );
+      toast.success(
+        `Generated ${
+          differences.leftDifferences.length +
+          differences.rightDifferences.length
+        } highlights!`
+      );
+    } catch (error) {
+      console.error("❌ Error generating highlights:", error);
+      toast.error("Failed to generate highlights");
+    } finally {
+      setCurrentTask("");
+    }
+  };
+
+  const getPDFDimensions = async (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const typedarray = new Uint8Array(e.target.result);
+          const pdf = await pdfjs.getDocument(typedarray).promise;
+          const page = await pdf.getPage(1);
+          const viewport = page.getViewport({ scale: 1.0 });
+
+          resolve({
+            width: viewport.width,
+            height: viewport.height,
+            success: true,
+          });
+        } catch (error) {
+          console.error("Error getting PDF dimensions:", error);
+          resolve({
+            width: 0,
+            height: 0,
+            success: false,
+          });
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
   };
 
   // Dynamic Progress Component
@@ -673,35 +1432,6 @@ export default function comparepdf() {
     },
     [checkPasswordProtection]
   );
-
-  // Helper function to get PDF dimensions
-  const getPDFDimensions = async (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const typedarray = new Uint8Array(e.target.result);
-          const pdf = await pdfjsLib.getDocument(typedarray).promise;
-          const page = await pdf.getPage(1); // Get first page
-          const viewport = page.getViewport({ scale: 1.0 });
-
-          resolve({
-            width: viewport.width,
-            height: viewport.height,
-            success: true,
-          });
-        } catch (error) {
-          console.error("Error getting PDF dimensions:", error);
-          resolve({
-            width: 0,
-            height: 0,
-            success: false,
-          });
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  };
 
   const handleFiles = useCallback(
     async (newFiles, targetSide = null) => {
@@ -1798,6 +2528,12 @@ export default function comparepdf() {
         comparisonResult={comparisonResult}
         leftAnalysis={leftAnalysis}
         rightAnalysis={rightAnalysis}
+        leftDifferences={leftDifferences}
+        rightDifferences={rightDifferences}
+        showHighlights={showHighlights}
+        onToggleHighlights={() => setShowHighlights(!showHighlights)}
+        onGenerateHighlights={handleGenerateHighlights}
+        comparisonComplete={comparisonComplete}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-10 border h-full">
@@ -1970,6 +2706,16 @@ export default function comparepdf() {
                 SafeFileUploader={SafeFileUploader}
                 semanticMode={true}
                 overlayMode={false}
+                // New highlighting props
+                comparisonComplete={comparisonComplete}
+                showHighlights={showHighlights}
+                leftDifferences={leftDifferences}
+                rightDifferences={rightDifferences}
+                onToggleHighlights={() => setShowHighlights(!showHighlights)}
+                // Enhanced highlighting props
+                leftAnalysis={leftAnalysis}
+                rightAnalysis={rightAnalysis}
+                comparisonResult={comparisonResult}
               />
             </div>
           ) : (

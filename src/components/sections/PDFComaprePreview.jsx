@@ -1,8 +1,4 @@
-"use client";
-
-import { useState, useRef } from "react";
-
-export default function PDFComaprePreview({
+export default function PDFComparePreview({
   // Container props
   containerRef,
   leftWidth = 50,
@@ -44,16 +40,28 @@ export default function PDFComaprePreview({
   handleFiles,
   allowedTypes = [".pdf"],
 
+  // Enhanced highlighting props
+  comparisonComplete = false,
+  showHighlights = true,
+  leftDifferences = [],
+  rightDifferences = [],
+  onToggleHighlights, // NEW PROP - function to toggle highlights
+
+  // Analysis props - NEWLY ADDED
+  leftAnalysis,
+  rightAnalysis,
+  comparisonResult,
+
+  // Mode props - NEWLY ADDED
+  semanticMode = false,
+  overlayMode = false,
+
   // Components
   PDFPreview,
   ZoomControls,
   SafeFileUploader,
-
 }) {
-
-
   return (
-
     <div
       ref={containerRef}
       className="h-full w-full relative flex bg-white rounded-lg shadow-sm overflow-hidden"
@@ -107,22 +115,26 @@ export default function PDFComaprePreview({
 
                     {Array.from({ length: totalPages }, (_, index) => {
                       const currentPageNumber = index + 1;
-
+                      // Get current page differences for LEFT panel
+                      const pageDifferences = leftDifferences.filter(
+                        (diff) => diff.pageNumber === currentPageNumber
+                      );
                       return (
                         <div
                           key={`${file.id}-page-${currentPageNumber}`}
-                          className={`${isSinglePage
-                            ? leftZoom > 100
-                              ? "h-auto overflow-x-auto overflow-y-hidden"
-                              : "h-full flex justify-center items-center"
-                            : leftZoom > 100
+                          className={`${
+                            isSinglePage
+                              ? leftZoom > 100
+                                ? "h-auto overflow-x-auto overflow-y-hidden"
+                                : "h-full flex justify-center items-center"
+                              : leftZoom > 100
                               ? "mb-1 sm:mb-2 w-full"
                               : "flex justify-center mb-1 sm:mb-2"
-                            }`}
+                          }`}
                           style={{
                             width:
                               (isSinglePage && leftZoom > 100) ||
-                                (leftZoom > 100 && !isSinglePage)
+                              (leftZoom > 100 && !isSinglePage)
                                 ? "max-content"
                                 : "auto",
                           }}
@@ -149,6 +161,18 @@ export default function PDFComaprePreview({
                                   ? { height: "100%", width: "100%" }
                                   : {}),
                               }}
+                              // Highlighting props for LEFT panel
+                              side="left"
+                              comparisonComplete={comparisonComplete}
+                              showHighlights={showHighlights}
+                              differences={pageDifferences}
+                              highlightColor="red"
+                              // NEWLY ADDED PROPS - Pass kiye gaye hain
+                              semanticMode={semanticMode}
+                              overlayMode={overlayMode}
+                              analysis={leftAnalysis} // Left panel ke liye leftAnalysis
+                              comparisonResult={comparisonResult}
+                              onToggleHighlights={onToggleHighlights}
                             />
                           )}
                         </div>
@@ -192,8 +216,9 @@ export default function PDFComaprePreview({
 
       {/* Resizer */}
       <div
-        className={`w-1 bg-gray-300 cursor-col-resize hover:bg-gray-400 transition-colors duration-200 relative group ${isResizing ? "bg-blue-500" : ""
-          }`}
+        className={`w-1 bg-gray-300 cursor-col-resize hover:bg-gray-400 transition-colors duration-200 relative group ${
+          isResizing ? "bg-blue-500" : ""
+        }`}
         onMouseDown={handleMouseDown}
       >
         <div className="absolute inset-y-0 -left-1 -right-1 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -249,22 +274,26 @@ export default function PDFComaprePreview({
 
                     {Array.from({ length: totalPages }, (_, index) => {
                       const currentPageNumber = index + 1;
-
+                      // Get current page differences for RIGHT panel
+                      const pageDifferences = rightDifferences.filter(
+                        (diff) => diff.pageNumber === currentPageNumber
+                      );
                       return (
                         <div
                           key={`${file.id}-page-${currentPageNumber}`}
-                          className={`${isSinglePage
-                            ? rightZoom > 100
-                              ? "h-auto overflow-x-auto overflow-y-hidden"
-                              : "h-full flex justify-center items-center"
-                            : rightZoom > 100
+                          className={`${
+                            isSinglePage
+                              ? rightZoom > 100
+                                ? "h-auto overflow-x-auto overflow-y-hidden"
+                                : "h-full flex justify-center items-center"
+                              : rightZoom > 100
                               ? "mb-1 sm:mb-2 w-full"
                               : "flex justify-center mb-1 sm:mb-2"
-                            }`}
+                          }`}
                           style={{
                             width:
                               (isSinglePage && rightZoom > 100) ||
-                                (rightZoom > 100 && !isSinglePage)
+                              (rightZoom > 100 && !isSinglePage)
                                 ? "max-content"
                                 : "auto",
                           }}
@@ -291,6 +320,18 @@ export default function PDFComaprePreview({
                                   ? { height: "100%", width: "100%" }
                                   : {}),
                               }}
+                              // Highlighting props for RIGHT panel
+                              side="right"
+                              comparisonComplete={comparisonComplete}
+                              showHighlights={showHighlights}
+                              differences={pageDifferences}
+                              highlightColor="green"
+                              // NEWLY ADDED PROPS - Pass kiye gaye hain
+                              semanticMode={semanticMode}
+                              overlayMode={overlayMode}
+                              analysis={rightAnalysis} // Right panel ke liye rightAnalysis
+                              comparisonResult={comparisonResult}
+                              onToggleHighlights={onToggleHighlights}
                             />
                           )}
                         </div>

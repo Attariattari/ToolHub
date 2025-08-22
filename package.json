@@ -40,6 +40,7 @@
     "socket.io-client": "^4.8.1",
     "sonner": "^2.0.1",
     "sweetalert2": "^11.16.0",
+    "swiper": "^11.2.10",
     "tailwindcss-animate": "^1.0.7",
     "ui-button": "^2.1.12"
   },

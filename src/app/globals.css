@@ -209,7 +209,232 @@
 .blog-content img {
   @apply rounded-lg shadow-sm my-6;
 }
+/* Enhanced Highlighting Styles for PDF Comparison */
 
+/* Fade-in animation for highlights */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Improved highlight hover effects */
+[title]:hover {
+  z-index: 20 !important;
+  transform: scale(1.02);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all 0.2s ease-in-out;
+}
+
+/* Better text selection within highlights */
+.pdf-highlight {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* Highlight layer positioning */
+.highlight-layer {
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+}
+
+/* Individual highlight styling */
+.text-highlight {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+  transition: all 0.2s ease-in-out;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+/* Highlight colors */
+.text-highlight--removed {
+  background-color: rgba(255, 59, 48, 0.25);
+  border: 1px solid rgba(255, 59, 48, 0.5);
+}
+
+.text-highlight--added {
+  background-color: rgba(52, 199, 89, 0.25);
+  border: 1px solid rgba(52, 199, 89, 0.5);
+}
+
+/* High confidence highlights */
+.text-highlight--high-confidence {
+  background-color: rgba(255, 59, 48, 0.35);
+  border-width: 1.5px;
+}
+
+.text-highlight--high-confidence.text-highlight--added {
+  background-color: rgba(52, 199, 89, 0.35);
+}
+
+/* Low confidence highlights */
+.text-highlight--low-confidence {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+/* Debug mode styles */
+.debug-highlight-info {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  z-index: 30;
+}
+
+.text-highlight:hover .debug-highlight-info {
+  opacity: 1;
+}
+
+/* PDF container improvements */
+.pdf-container {
+  position: relative;
+  background: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.pdf-page {
+  position: relative;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e5e7eb;
+}
+
+/* Status indicators */
+.highlight-status {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 20;
+}
+
+.highlight-status--removed {
+  background: rgba(220, 38, 38, 0.9);
+}
+
+.highlight-status--added {
+  background: rgba(34, 197, 94, 0.9);
+}
+
+/* Responsive highlight scaling */
+@media (max-width: 768px) {
+  .text-highlight {
+    border-width: 1.5px;
+    min-width: 20px;
+    min-height: 15px;
+  }
+
+  .debug-highlight-info {
+    font-size: 8px;
+  }
+
+  .highlight-status {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .text-highlight {
+    border-width: 2px;
+    min-width: 25px;
+    min-height: 18px;
+  }
+}
+
+/* Loading states */
+.highlight-loading {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 0, 0, 0.1),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Accessibility improvements */
+.text-highlight:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Print styles */
+@media print {
+  .text-highlight {
+    background: transparent !important;
+    border: 2px solid black;
+  }
+
+  .text-highlight--removed {
+    border-color: #dc2626;
+  }
+
+  .text-highlight--added {
+    border-color: #16a34a;
+  }
+
+  .debug-highlight-info,
+  .highlight-status {
+    display: none;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .pdf-container {
+    background: #1f2937;
+  }
+
+  .pdf-page {
+    background: white; /* Keep PDF pages white for readability */
+    border-color: #374151;
+  }
+
+  .highlight-status {
+    background: rgba(0, 0, 0, 0.9);
+  }
+}
 /* @tailwind base;
 @tailwind components;
 @tailwind utilities;
