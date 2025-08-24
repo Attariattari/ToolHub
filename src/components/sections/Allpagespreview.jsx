@@ -18,7 +18,6 @@ const ResizableTextElement = ({
   onUpdate,
   onDelete,
   onTextChange,
-  pageScale = 1,
   zoom = 100,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -430,7 +429,7 @@ const ResizableTextElement = ({
         opacity: textElement.opacity || 1,
         padding: "4px 6px",
         borderRadius: "4px",
-        zIndex: isSelected ? 1000 : 100,
+        zIndex: isSelected ? 20 : 10,
         minWidth: Math.max(60, calculatedFontSize * 3) + "px",
         minHeight: Math.max(30, calculatedFontSize * 1.8) + "px",
         boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
@@ -557,28 +556,6 @@ const ResizableTextElement = ({
               ))}
             </>
           )}
-
-          {/* Delete button - show on selection OR hover */}
-          <button
-            className="delete-btn absolute bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 shadow-md"
-            style={{
-              width: "22px",
-              height: "22px",
-              top: "-11px",
-              right: "-11px",
-              fontSize: "14px",
-              fontWeight: "bold",
-              lineHeight: 1,
-              pointerEvents: "auto",
-              transition: "none",
-              zIndex: 1001,
-              opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
-            }}
-            onClick={handleDeleteClick}
-            title="Delete text"
-          >
-            ×
-          </button>
         </>
       )}
     </div>
@@ -588,19 +565,12 @@ const ResizableTextElement = ({
 const Allpagespreview = memo(
   ({
     file,
-    pageNumber = 1,
     isLoading,
     onLoadSuccess,
     onLoadError,
-    onRemove,
     isHealthy,
     isPasswordProtected,
-    showRemoveButton = true,
     userZoom = 100,
-    isSinglePage = false,
-    showAllPages = true,
-    showSinglePage = false,
-    showSpread = false,
     layoutType = "continuous",
     style = {},
     onPageChange,
@@ -742,7 +712,7 @@ const Allpagespreview = memo(
       }
     }, [currentPage, documentLoaded, layoutType]);
 
-    // Page visibility tracking for current page detection
+    // FIXED: Page visibility tracking with dynamic threshold based on zoom
     useEffect(() => {
       if (
         (layoutType !== "continuous" && layoutType !== "spread") ||
@@ -751,6 +721,22 @@ const Allpagespreview = memo(
       )
         return;
 
+      // Dynamic threshold based on zoom level
+      const getThresholdForZoom = (zoom) => {
+        if (zoom <= 50) return [0.1, 0.3, 0.6]; // Lower zoom = easier detection
+        if (zoom <= 75) return [0.15, 0.4, 0.7];
+        if (zoom <= 100) return [0.2, 0.5, 0.8];
+        return [0.25, 0.5, 0.9]; // Higher zoom = need more visibility
+      };
+
+      // Dynamic root margin based on zoom level
+      const getRootMarginForZoom = (zoom) => {
+        if (zoom <= 50) return "-5% 0px -5% 0px"; // More lenient for low zoom
+        if (zoom <= 75) return "-8% 0px -8% 0px";
+        if (zoom <= 100) return "-10% 0px -10% 0px";
+        return "-15% 0px -15% 0px"; // Stricter for high zoom
+      };
+
       const pageObserver = new IntersectionObserver(
         (entries) => {
           if (isUserScrollingRef.current) {
@@ -758,30 +744,47 @@ const Allpagespreview = memo(
           }
 
           const currentlyVisible = new Set();
+          let bestVisibilityRatio = 0;
+          let bestVisiblePage = null;
 
           entries.forEach((entry) => {
             const pageNum = parseInt(
               entry.target.getAttribute("data-page-number")
             );
-            if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+
+            // More flexible visibility detection
+            const minThreshold = userZoom <= 75 ? 0.3 : 0.5;
+
+            if (
+              entry.isIntersecting &&
+              entry.intersectionRatio > minThreshold
+            ) {
               currentlyVisible.add(pageNum);
+
+              // Track the page with best visibility
+              if (entry.intersectionRatio > bestVisibilityRatio) {
+                bestVisibilityRatio = entry.intersectionRatio;
+                bestVisiblePage = pageNum;
+              }
             }
           });
 
-          if (currentlyVisible.size > 0) {
+          if (currentlyVisible.size > 0 && bestVisiblePage) {
             setVisiblePages(currentlyVisible);
-            const topVisiblePage = Math.min(...Array.from(currentlyVisible));
-            if (topVisiblePage !== currentPage) {
-              onPageChange(topVisiblePage);
+
+            // Only change page if the best visible page is different from current
+            if (bestVisiblePage !== currentPage) {
+              onPageChange(bestVisiblePage);
             }
           }
         },
         {
-          threshold: [0.1, 0.5, 0.9],
-          rootMargin: "-10% 0px -10% 0px",
+          threshold: getThresholdForZoom(userZoom),
+          rootMargin: getRootMarginForZoom(userZoom),
         }
       );
 
+      // Re-observe all pages when zoom changes
       Object.values(pageRefs.current).forEach((pageElement) => {
         if (pageElement) {
           pageObserver.observe(pageElement);
@@ -794,7 +797,7 @@ const Allpagespreview = memo(
           clearTimeout(scrollTimeoutRef.current);
         }
       };
-    }, [documentLoaded, layoutType, onPageChange, currentPage]);
+    }, [documentLoaded, layoutType, onPageChange, currentPage, userZoom]); // Added userZoom dependency
 
     // Monitor zoom changes and trigger re-render
     useEffect(() => {
@@ -1525,10 +1528,6 @@ const Allpagespreview = memo(
         {/* File Preview Area */}
         <div className="w-full relative h-full overflow-hidden">
           {renderPreview()}
-
-          {/* REMOVED: Remove Button - No longer showing remove button */}
-
-          {/* REMOVED: Text editing indicator - No longer showing "Click to add text" */}
 
           {/* Selected text info */}
           {selectedTextId && textEditingState?.showTextToolbar && (

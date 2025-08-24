@@ -21,7 +21,6 @@ import {
   Palette,
   Square,
 } from "lucide-react";
-import { createPortal } from "react-dom";
 
 import { pdfjs, Document, Page } from "react-pdf";
 import ProgressScreen from "@/components/tools/ProgressScreen";
@@ -711,11 +710,6 @@ export default function PDFViewer() {
   // UPDATED: Toggle text editing mode - ab direct text add hoga
   const handleTextButtonClick = () => {
     setTextEditingState((prev) => {
-      if (prev.showTextToolbar) {
-        // Close text editing mode - reset to initial state
-        return initialTextState;
-      }
-
       // Open text editing mode aur direct text add karo
       const newState = {
         ...initialTextState,
@@ -847,7 +841,10 @@ export default function PDFViewer() {
   };
 
   const handleDelete = () => {
-    document.execCommand("delete");
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+    }));
   };
 
   const options = [
@@ -944,7 +941,7 @@ export default function PDFViewer() {
               <button
                 className={`p-3 rounded-lg transition-all duration-200 ${
                   textEditingState.showTextToolbar
-                    ? "bg-blue-100 text-blue-600 ring-2 ring-blue-400"
+                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
                     : "hover:bg-gray-100 text-gray-700"
                 }`}
                 onClick={handleTextButtonClick}
@@ -1218,9 +1215,6 @@ export default function PDFViewer() {
                           onRemove={() => removeFile(file.id)}
                           userZoom={zoom}
                           currentPage={currentPage}
-                          showSinglePage={currentLayout === "single"}
-                          showAllPages={currentLayout === "continuous"}
-                          showSpread={currentLayout === "spread"}
                           layoutType={currentLayout}
                           onPageChange={handlePageChange}
                           // Text editing props
@@ -1260,99 +1254,13 @@ export default function PDFViewer() {
 
         {/* Right Sidebar - Same as before (3 columns) */}
         <div className="hidden md:flex md:col-span-3 overflow-y-auto custom-scrollbar border-l flex-col">
-          <div className="p-4">
-            <div className="space-y-4">
-              {/* File Info Section */}
-              <div className="bg-white rounded-lg border p-4">
-                <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-blue-600" />
-                  File Information
-                </h3>
-
-                {files.length > 0 && (
-                  <div className="space-y-3">
-                    {files.map((file) => (
-                      <div
-                        key={file.id}
-                        className="border rounded-lg p-3 bg-gray-50"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="font-medium text-gray-800 truncate">
-                            {file.name}
-                          </h4>
-                          <button
-                            onClick={() => removeFile(file.id)}
-                            className="text-red-500 hover:text-red-700 p-1"
-                            title="Remove file"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
-                        </div>
-
-                        <div className="text-sm text-gray-600 space-y-1">
-                          <div>Size: {file.size}</div>
-                          {file.numPages && <div>Pages: {file.numPages}</div>}
-                          <div>Current: Page {currentPage}</div>
-                          <div className="flex items-center gap-1">
-                            Status:
-                            {passwordProtectedFiles.has(file.id) ? (
-                              <span className="text-yellow-600 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Password Protected
-                              </span>
-                            ) : pdfHealthCheck[file.id] === false ? (
-                              <span className="text-red-600 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Error
-                              </span>
-                            ) : (
-                              <span className="text-green-600 flex items-center gap-1">
-                                <Check className="w-3 h-3" />
-                                Ready
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Upload New File Section */}
-              <div className="bg-white rounded-lg border p-4">
-                <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                  Upload New File
-                </h3>
-                <SafeFileUploader
-                  isMultiple={false}
-                  onFilesSelect={handleFiles}
-                  onPasswordProtectedFile={handleProtectedFiles}
-                  isDragOver={isDragOver}
-                  setIsDragOver={setIsDragOver}
-                  allowedTypes={[".pdf"]}
-                  showFiles={true}
-                  uploadButtonText="Select PDF"
-                  hideTitle={true}
-                  compact={true}
-                />
-              </div>
-
-              {/* Health Check */}
-              {hasUnhealthyFiles && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-red-700">
-                    <AlertCircle className="w-5 h-5" />
-                    <span className="font-medium">File Issues Detected</span>
-                  </div>
-                  <p className="text-red-600 text-sm mt-1">
-                    Some files could not be loaded properly. Please check the
-                    file format.
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+          <div className="flex flex-col justify-between h-full">
+            <div className="border-b border-gray-100">
+              <h3 className="sticky top-0 bg-white text-2xl h-16 flex justify-center items-center font-bold text-gray-900 text-center">
+                Edit PDF
+              </h3>
+            </div>{" "}
+          </div>{" "}
         </div>
       </div>
 
