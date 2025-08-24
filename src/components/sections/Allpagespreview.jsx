@@ -10,7 +10,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import { FileText, X, ChevronUp, Edit, Type } from "lucide-react";
 import { IoMdLock } from "react-icons/io";
 
-// Resizable Text Element Component
+// Updated ResizableTextElement with proper font size handling and textarea focus
 const ResizableTextElement = ({
   textElement,
   isSelected,
@@ -19,27 +19,80 @@ const ResizableTextElement = ({
   onDelete,
   onTextChange,
   pageScale = 1,
+  zoom = 100,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [resizeStart, setResizeStart] = useState({
     x: 0,
     y: 0,
     width: 0,
     height: 0,
+    elementX: 0,
+    elementY: 0,
   });
   const [currentResizeHandle, setCurrentResizeHandle] = useState(null);
+  const [clickCount, setClickCount] = useState(0);
   const elementRef = useRef(null);
+  const textareaRef = useRef(null);
+  const clickTimeoutRef = useRef(null);
+
+  // Calculate scaled dimensions from base coordinates
+  const scaledWidth = (textElement.width * zoom) / 100;
+  const scaledHeight = (textElement.height * zoom) / 100;
+  const scaledX = (textElement.x * zoom) / 100;
+  const scaledY = (textElement.y * zoom) / 100;
+
+  // Calculate proper font size
+  const calculatedFontSize = useMemo(() => {
+    return Math.max(8, textElement.fontSize);
+  }, [textElement.fontSize]);
+
+  // Auto-focus textarea when editing starts
+  useEffect(() => {
+    if (textElement.isEditing && textareaRef.current) {
+      const timeoutId = setTimeout(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.select();
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [textElement.isEditing]);
+
+  // Function to get PDF page boundaries
+  const getPageBoundaries = useCallback(() => {
+    const pageElement = elementRef.current?.closest("[data-page-number]");
+    if (!pageElement) return null;
+
+    const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
+    if (!pdfPageElement) return null;
+
+    const pageRect = pdfPageElement.getBoundingClientRect();
+    return {
+      width: pageRect.width,
+      height: pageRect.height,
+      element: pdfPageElement,
+    };
+  }, []);
 
   const handleMouseDown = (e) => {
-    // CRITICAL: Stop propagation to prevent page click
     e.stopPropagation();
     e.preventDefault();
 
-    // Select this element
-    onSelect(textElement.id);
+    // Don't handle mouse down if we're in editing mode and clicking on textarea
+    if (textElement.isEditing && e.target.tagName === "TEXTAREA") {
+      return;
+    }
 
+    // If currently editing, exit edit mode first
+    if (textElement.isEditing) {
+      onUpdate({ isEditing: false });
+      return;
+    }
+
+    // Handle resize handles
     if (e.target.classList.contains("resize-handle")) {
       setIsResizing(true);
       setCurrentResizeHandle(e.target.dataset.direction);
@@ -50,122 +103,160 @@ const ResizableTextElement = ({
         y: e.clientY,
         width: textElement.width,
         height: textElement.height,
-        elementX: rect.left,
-        elementY: rect.top,
+        elementX: textElement.x,
+        elementY: textElement.y,
       });
-    } else if (
-      !e.target.classList.contains("delete-btn") &&
-      !e.target.tagName.toLowerCase().includes("textarea")
-    ) {
-      // Start dragging
-      setIsDragging(true);
-      const rect = elementRef.current.getBoundingClientRect();
-      setDragStart({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-      });
+      return;
     }
+
+    // Handle delete button
+    if (e.target.classList.contains("delete-btn")) {
+      return; // Let the delete handler handle this
+    }
+
+    // Select this element if not selected
+    if (!isSelected) {
+      onSelect(textElement.id);
+      return;
+    }
+
+    // Start dragging if already selected
+    setIsDragging(true);
+    const rect = elementRef.current.getBoundingClientRect();
+    setDragStart({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
   };
 
   const handleMouseMove = useCallback(
     (e) => {
       if (isDragging) {
-        const pageElement = elementRef.current?.closest("[data-page-number]");
-        if (!pageElement) return;
+        const pageBounds = getPageBoundaries();
+        if (!pageBounds) return;
 
-        // Get the actual PDF page element, not just the container
-        const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
-        if (!pdfPageElement) return;
+        const pageRect = pageBounds.element.getBoundingClientRect();
 
-        const pageRect = pdfPageElement.getBoundingClientRect();
-        const newX = Math.max(
+        // Calculate new position in current zoom scale
+        const newScaledX = Math.max(
           0,
           Math.min(
-            pageRect.width - textElement.width,
+            pageBounds.width - scaledWidth,
             e.clientX - pageRect.left - dragStart.x
           )
         );
-        const newY = Math.max(
+        const newScaledY = Math.max(
           0,
           Math.min(
-            pageRect.height - textElement.height,
+            pageBounds.height - scaledHeight,
             e.clientY - pageRect.top - dragStart.y
           )
         );
 
+        // Convert back to base coordinates (zoom-independent)
+        const newX = (newScaledX * 100) / zoom;
+        const newY = (newScaledY * 100) / zoom;
+
         onUpdate({ x: newX, y: newY });
       } else if (isResizing && currentResizeHandle) {
+        const pageBounds = getPageBoundaries();
+        if (!pageBounds) return;
+
+        // Calculate delta in screen coordinates
         const deltaX = e.clientX - resizeStart.x;
         const deltaY = e.clientY - resizeStart.y;
 
+        // Convert delta to base coordinates (zoom-independent)
+        const baseDeltaX = (deltaX * 100) / zoom;
+        const baseDeltaY = (deltaY * 100) / zoom;
+
+        // Work with base coordinates for consistency
         let newWidth = resizeStart.width;
         let newHeight = resizeStart.height;
-        let newX = textElement.x;
-        let newY = textElement.y;
+        let newX = resizeStart.elementX;
+        let newY = resizeStart.elementY;
 
-        // Minimum sizes
-        const minWidth = 30;
-        const minHeight = 20;
+        // Calculate minimum sizes in base coordinates
+        const minWidth = Math.max(80, calculatedFontSize * 4);
+        const minHeight = Math.max(40, calculatedFontSize * 2);
 
+        // Apply resize based on handle direction using base coordinates
         switch (currentResizeHandle) {
-          case "se": // Southeast
-            newWidth = Math.max(minWidth, resizeStart.width + deltaX);
-            newHeight = Math.max(minHeight, resizeStart.height + deltaY);
+          case "se": // Southeast - increase width and height
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
+            newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
             break;
-          case "sw": // Southwest
-            newWidth = Math.max(minWidth, resizeStart.width - deltaX);
-            newHeight = Math.max(minHeight, resizeStart.height + deltaY);
-            newX = textElement.x + (resizeStart.width - newWidth);
+          case "sw": // Southwest - decrease width, increase height, move left
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
             break;
-          case "ne": // Northeast
-            newWidth = Math.max(minWidth, resizeStart.width + deltaX);
-            newHeight = Math.max(minHeight, resizeStart.height - deltaY);
-            newY = textElement.y + (resizeStart.height - newHeight);
+          case "ne": // Northeast - increase width, decrease height, move up
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
+            newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "nw": // Northwest
-            newWidth = Math.max(minWidth, resizeStart.width - deltaX);
-            newHeight = Math.max(minHeight, resizeStart.height - deltaY);
-            newX = textElement.x + (resizeStart.width - newWidth);
-            newY = textElement.y + (resizeStart.height - newHeight);
+          case "nw": // Northwest - decrease both, move both
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "n": // North
-            newHeight = Math.max(minHeight, resizeStart.height - deltaY);
-            newY = textElement.y + (resizeStart.height - newHeight);
+          case "n": // North - decrease height, move up
+            newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "s": // South
-            newHeight = Math.max(minHeight, resizeStart.height + deltaY);
+          case "s": // South - increase height
+            newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
             break;
-          case "e": // East
-            newWidth = Math.max(minWidth, resizeStart.width + deltaX);
+          case "e": // East - increase width
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
             break;
-          case "w": // West
-            newWidth = Math.max(minWidth, resizeStart.width - deltaX);
-            newX = textElement.x + (resizeStart.width - newWidth);
+          case "w": // West - decrease width, move left
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
             break;
         }
 
-        // Get PDF page boundaries for proper constraint
-        const pageElement = elementRef.current?.closest("[data-page-number]");
-        const pdfPageElement = pageElement?.querySelector(".react-pdf__Page");
+        // Apply boundary constraints in base coordinates
+        const pageBaseWidth = (pageBounds.width * 100) / zoom;
+        const pageBaseHeight = (pageBounds.height * 100) / zoom;
 
-        if (pdfPageElement) {
-          const pageRect = pdfPageElement.getBoundingClientRect();
-          const containerRect = pageElement.getBoundingClientRect();
-
-          // Calculate relative boundaries
-          const maxX = pageRect.width - newWidth;
-          const maxY = pageRect.height - newHeight;
-
-          // Apply boundary constraints
-          newX = Math.max(0, Math.min(maxX, newX));
-          newY = Math.max(0, Math.min(maxY, newY));
-        } else {
-          // Fallback boundary checks
-          newX = Math.max(0, newX);
-          newY = Math.max(0, newY);
+        // Ensure element stays within page boundaries
+        if (newX < 0) {
+          newWidth = newWidth + newX;
+          newX = 0;
         }
 
-        onUpdate({ width: newWidth, height: newHeight, x: newX, y: newY });
+        if (newY < 0) {
+          newHeight = newHeight + newY;
+          newY = 0;
+        }
+
+        // Limit to page boundaries
+        if (newX + newWidth > pageBaseWidth) {
+          newWidth = pageBaseWidth - newX;
+        }
+
+        if (newY + newHeight > pageBaseHeight) {
+          newHeight = pageBaseHeight - newY;
+        }
+
+        // Ensure minimum dimensions are maintained
+        newWidth = Math.max(minWidth, newWidth);
+        newHeight = Math.max(minHeight, newHeight);
+
+        // Final position adjustment to stay within bounds
+        newX = Math.max(0, Math.min(pageBaseWidth - newWidth, newX));
+        newY = Math.max(0, Math.min(pageBaseHeight - newHeight, newY));
+
+        // Update with base coordinates
+        onUpdate({
+          width: newWidth,
+          height: newHeight,
+          x: newX,
+          y: newY,
+        });
       }
     },
     [
@@ -174,8 +265,12 @@ const ResizableTextElement = ({
       dragStart,
       resizeStart,
       currentResizeHandle,
-      textElement,
       onUpdate,
+      getPageBoundaries,
+      scaledWidth,
+      scaledHeight,
+      zoom,
+      calculatedFontSize,
     ]
   );
 
@@ -185,10 +280,9 @@ const ResizableTextElement = ({
     setCurrentResizeHandle(null);
   }, []);
 
-  // Add performance optimization for mouse move events
+  // Throttled mouse move for better performance
   const throttledMouseMove = useCallback(
     (e) => {
-      // Use requestAnimationFrame for smooth movement
       requestAnimationFrame(() => {
         handleMouseMove(e);
       });
@@ -198,7 +292,6 @@ const ResizableTextElement = ({
 
   useEffect(() => {
     if (isDragging || isResizing) {
-      // Use throttled mouse move for better performance
       document.addEventListener("mousemove", throttledMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
       return () => {
@@ -223,14 +316,14 @@ const ResizableTextElement = ({
   };
 
   const handleInputKeyDown = (e) => {
-    // Stop propagation for keyboard events too
     e.stopPropagation();
 
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       onUpdate({ isEditing: false });
-    }
-    if (e.key === "Escape") {
+    } else if (e.key === "Enter" && e.shiftKey) {
+      // Allow new line
+    } else if (e.key === "Escape") {
       e.preventDefault();
       onUpdate({ isEditing: false });
     }
@@ -243,13 +336,52 @@ const ResizableTextElement = ({
 
   const handleTextareaBlur = (e) => {
     e.stopPropagation();
-    onUpdate({ isEditing: false });
+    if (!isDragging && !isResizing) {
+      onUpdate({ isEditing: false });
+    }
   };
 
-  const handleDoubleClick = (e) => {
+  const handleTextareaClick = (e) => {
     e.stopPropagation();
-    e.preventDefault();
-    onUpdate({ isEditing: true });
+  };
+
+  // Handle single and double click logic
+  const handleClick = (e) => {
+    e.stopPropagation();
+
+    // If not selected, select it (first click)
+    if (!isSelected) {
+      onSelect(textElement.id);
+      setClickCount(1);
+      return;
+    }
+
+    // If already selected, handle double-click logic
+    if (isSelected) {
+      setClickCount((prev) => prev + 1);
+
+      // Clear any existing timeout
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+      }
+
+      // Set timeout for single click action
+      clickTimeoutRef.current = setTimeout(() => {
+        if (clickCount + 1 === 2 && !textElement.isEditing) {
+          // Double click - enter edit mode
+          onUpdate({ isEditing: true });
+        }
+        setClickCount(0);
+      }, 250); // 250ms timeout for double-click detection
+    }
+  };
+
+  const handleMouseEnter = () => {
+    setIsHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
   };
 
   const handleDeleteClick = (e) => {
@@ -257,6 +389,15 @@ const ResizableTextElement = ({
     e.preventDefault();
     onDelete();
   };
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -271,11 +412,11 @@ const ResizableTextElement = ({
           : "cursor-default"
       }`}
       style={{
-        left: textElement.x,
-        top: textElement.y,
-        width: textElement.width,
-        height: textElement.height,
-        fontSize: textElement.fontSize * pageScale,
+        left: scaledX,
+        top: scaledY,
+        width: scaledWidth,
+        height: scaledHeight,
+        fontSize: `${calculatedFontSize}px`,
         fontFamily: textElement.fontFamily,
         color: textElement.color,
         backgroundColor:
@@ -287,26 +428,37 @@ const ResizableTextElement = ({
         textDecoration: textElement.isUnderline ? "underline" : "none",
         textAlign: textElement.alignment,
         opacity: textElement.opacity || 1,
-        padding: "2px 4px",
-        borderRadius: "3px",
+        padding: "4px 6px",
+        borderRadius: "4px",
         zIndex: isSelected ? 1000 : 100,
-        minWidth: "30px",
-        minHeight: "20px",
+        minWidth: Math.max(60, calculatedFontSize * 3) + "px",
+        minHeight: Math.max(30, calculatedFontSize * 1.8) + "px",
         boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
-        border: textElement.isEditing ? "1px solid #3b82f6" : "none",
+        border: textElement.isEditing
+          ? "2px solid #3b82f6"
+          : isSelected
+          ? "1px solid #3b82f6"
+          : "1px solid rgba(0,0,0,0.1)",
         pointerEvents: "auto",
-        transition: isDragging || isResizing ? "none" : "box-shadow 0.1s ease", // Remove transition delays during interaction
+        transition: isDragging || isResizing ? "none" : "all 0.2s ease",
+        transform: "translateZ(0)",
+        willChange: isDragging || isResizing ? "transform" : "auto",
       }}
       onMouseDown={handleMouseDown}
+      onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Text content */}
       {textElement.isEditing ? (
         <textarea
+          ref={textareaRef}
           value={textElement.text}
           onChange={handleTextareaChange}
           onBlur={handleTextareaBlur}
           onKeyDown={handleInputKeyDown}
-          onClick={(e) => e.stopPropagation()} // Prevent click propagation
+          onClick={handleTextareaClick}
+          onMouseDown={(e) => e.stopPropagation()}
           className="w-full h-full bg-transparent border-none outline-none resize-none"
           style={{
             fontSize: "inherit",
@@ -318,29 +470,29 @@ const ResizableTextElement = ({
             textAlign: "inherit",
             padding: 0,
             margin: 0,
-            lineHeight: "1.2",
+            lineHeight: "1.4",
           }}
-          autoFocus
+          placeholder="Enter text..."
           spellCheck={false}
+          autoComplete="off"
         />
       ) : (
         <div
           className="w-full h-full flex items-center overflow-hidden"
-          onDoubleClick={handleDoubleClick}
           style={{
             wordWrap: "break-word",
             overflowWrap: "break-word",
-            lineHeight: "1.2",
+            lineHeight: "1.4",
             whiteSpace: "pre-wrap",
-            pointerEvents: "auto", // Ensure this div can receive events
+            pointerEvents: "auto",
           }}
         >
           {textElement.text}
         </div>
       )}
 
-      {/* Controls - only show when selected */}
-      {isSelected && (
+      {/* Controls - show on selection OR hover */}
+      {(isSelected || isHovered) && (
         <>
           {/* Resize handles - only show when not editing */}
           {!textElement.isEditing && (
@@ -351,15 +503,17 @@ const ResizableTextElement = ({
                   key={direction}
                   className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
                   style={{
-                    width: "8px",
-                    height: "8px",
+                    width: "12px",
+                    height: "12px",
                     cursor: getCursorStyle(direction),
-                    top: direction.includes("n") ? "-4px" : undefined,
-                    bottom: direction.includes("s") ? "-4px" : undefined,
-                    left: direction.includes("w") ? "-4px" : undefined,
-                    right: direction.includes("e") ? "-4px" : undefined,
+                    top: direction.includes("n") ? "-6px" : undefined,
+                    bottom: direction.includes("s") ? "-6px" : undefined,
+                    left: direction.includes("w") ? "-6px" : undefined,
+                    right: direction.includes("e") ? "-6px" : undefined,
                     pointerEvents: "auto",
-                    transition: "none", // Remove transition for immediate response
+                    transition: "none",
+                    zIndex: 1001,
+                    opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
                   }}
                   data-direction={direction}
                 />
@@ -371,30 +525,32 @@ const ResizableTextElement = ({
                   key={direction}
                   className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
                   style={{
-                    width: "8px",
-                    height: "8px",
+                    width: "10px",
+                    height: "10px",
                     cursor: getCursorStyle(direction),
                     top:
                       direction === "n"
-                        ? "-4px"
+                        ? "-5px"
                         : direction === "s"
                         ? undefined
                         : "50%",
-                    bottom: direction === "s" ? "-4px" : undefined,
+                    bottom: direction === "s" ? "-5px" : undefined,
                     left:
                       direction === "w"
-                        ? "-4px"
+                        ? "-5px"
                         : direction === "e"
                         ? undefined
                         : "50%",
-                    right: direction === "e" ? "-4px" : undefined,
+                    right: direction === "e" ? "-5px" : undefined,
                     transform: ["n", "s"].includes(direction)
                       ? "translateX(-50%)"
                       : ["e", "w"].includes(direction)
                       ? "translateY(-50%)"
                       : undefined,
                     pointerEvents: "auto",
-                    transition: "none", // Remove transition for immediate response
+                    transition: "none",
+                    zIndex: 1001,
+                    opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
                   }}
                   data-direction={direction}
                 />
@@ -402,19 +558,21 @@ const ResizableTextElement = ({
             </>
           )}
 
-          {/* Delete button - always show when selected */}
+          {/* Delete button - show on selection OR hover */}
           <button
             className="delete-btn absolute bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 shadow-md"
             style={{
-              width: "20px",
-              height: "20px",
-              top: "-10px",
-              right: "-10px",
-              fontSize: "12px",
+              width: "22px",
+              height: "22px",
+              top: "-11px",
+              right: "-11px",
+              fontSize: "14px",
               fontWeight: "bold",
               lineHeight: 1,
               pointerEvents: "auto",
-              transition: "none", // Remove transition for immediate response
+              transition: "none",
+              zIndex: 1001,
+              opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
             }}
             onClick={handleDeleteClick}
             title="Delete text"
@@ -462,7 +620,7 @@ const Allpagespreview = memo(
     const [visiblePages, setVisiblePages] = useState(new Set());
     const [textElements, setTextElements] = useState({});
     const [selectedTextId, setSelectedTextId] = useState(null);
-
+    const [currentZoom, setCurrentZoom] = useState(userZoom);
     const elementRef = useRef(null);
     const pageRefs = useRef({});
     const isUserScrollingRef = useRef(false);
@@ -638,6 +796,43 @@ const Allpagespreview = memo(
       };
     }, [documentLoaded, layoutType, onPageChange, currentPage]);
 
+    // Monitor zoom changes and trigger re-render
+    useEffect(() => {
+      if (userZoom !== currentZoom) {
+        setCurrentZoom(userZoom);
+        // Force immediate update of all text elements for smooth zoom transition
+        setTextElements((prevElements) => {
+          const updatedElements = { ...prevElements };
+          // This triggers re-render with new zoom values
+          Object.keys(updatedElements).forEach((pageNum) => {
+            updatedElements[pageNum] = [...updatedElements[pageNum]];
+          });
+          return updatedElements;
+        });
+      }
+    }, [userZoom, currentZoom]);
+
+    // Additional effect to handle real-time zoom updates for selected text
+    useEffect(() => {
+      if (selectedTextId && userZoom !== currentZoom) {
+        // Find and update selected text element if needed
+        const pageNumber = Object.keys(textElements).find((page) =>
+          textElements[page]?.some((text) => text.id === selectedTextId)
+        );
+
+        if (pageNumber) {
+          // This will trigger a re-render of the selected element
+          const element = textElements[pageNumber]?.find(
+            (t) => t.id === selectedTextId
+          );
+          if (element) {
+            // Trigger a small update to force re-render without changing actual values
+            setTextElements((prev) => ({ ...prev }));
+          }
+        }
+      }
+    }, [userZoom, currentZoom, selectedTextId, textElements]);
+
     // PDF load handlers
     const handleLoadError = useCallback(
       (error) => {
@@ -679,65 +874,8 @@ const Allpagespreview = memo(
       }));
     }, []);
 
-    // Text editing functions
-    const handlePageClick = useCallback(
-      (e, pageNumber) => {
-        // IMPORTANT: Check if click came from text element or its children
-        if (e.target.closest(".text-element")) {
-          return; // Don't create new text if clicking on existing text
-        }
-
-        // Only add text if text tool is active
-        if (!textEditingState?.showTextToolbar) {
-          // If text tool is not active, just deselect any selected text
-          setSelectedTextId(null);
-          return;
-        }
-
-        const pageElement = e.currentTarget.querySelector(".react-pdf__Page");
-        if (!pageElement) return;
-
-        const rect = pageElement.getBoundingClientRect();
-        const x = e.clientX - rect.left - 60;
-        const y = e.clientY - rect.top - 15;
-
-        const textId = `text_${Date.now()}_${Math.random()
-          .toString(36)
-          .substr(2, 9)}`;
-
-        const newTextElement = {
-          id: textId,
-          pageNumber,
-          x: Math.max(0, x),
-          y: Math.max(0, y),
-          width: 120,
-          height: 30,
-          text: "New Text",
-          fontSize: textEditingState?.selectedSize || 16,
-          fontFamily: textEditingState?.selectedFont || "Arial",
-          color: textEditingState?.selectedColor || "#000000",
-          backgroundColor: textEditingState?.selectedBgColor || "transparent",
-          isBold: textEditingState?.isBold || false,
-          isItalic: textEditingState?.isItalic || false,
-          isUnderline: textEditingState?.isUnderline || false,
-          alignment: textEditingState?.selectedAlignment || "left",
-          opacity: textEditingState?.opacity || 1,
-          isEditing: true,
-        };
-
-        setTextElements((prev) => ({
-          ...prev,
-          [pageNumber]: [...(prev[pageNumber] || []), newTextElement],
-        }));
-
-        setSelectedTextId(textId);
-
-        if (onTextAdd) {
-          onTextAdd(newTextElement);
-        }
-      },
-      [textEditingState, onTextAdd]
-    );
+    // REMOVED: handlePageClick function completely
+    // PDF pages will no longer create text on click
 
     const handleTextChange = useCallback(
       (textId, pageNumber, newText) => {
@@ -805,7 +943,57 @@ const Allpagespreview = memo(
       [selectedTextId, onTextDelete]
     );
 
-    // Update text styles when parent state changes
+    // Listen for text additions from parent
+    useEffect(() => {
+      if (textEditingState?.addTextToPage && currentPage) {
+        const pageNumber = currentPage;
+        const textId = `text_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+
+        const newTextElement = {
+          id: textId,
+          pageNumber,
+          x: 100, // Default position
+          y: 100, // Default position
+          width: 120,
+          height: 30,
+          text: "New Text",
+          fontSize: textEditingState?.selectedSize || 16,
+          fontFamily: textEditingState?.selectedFont || "Arial",
+          color: textEditingState?.selectedColor || "#000000",
+          backgroundColor: textEditingState?.selectedBgColor || "transparent",
+          isBold: textEditingState?.isBold || false,
+          isItalic: textEditingState?.isItalic || false,
+          isUnderline: textEditingState?.isUnderline || false,
+          alignment: textEditingState?.selectedAlignment || "left",
+          opacity: textEditingState?.opacity || 1,
+          isEditing: true,
+        };
+
+        setTextElements((prev) => ({
+          ...prev,
+          [pageNumber]: [...(prev[pageNumber] || []), newTextElement],
+        }));
+
+        setSelectedTextId(textId);
+
+        if (onTextAdd) {
+          onTextAdd(newTextElement);
+        }
+
+        // Reset the flag in parent
+        if (textEditingState.onTextAdded) {
+          textEditingState.onTextAdded();
+        }
+      }
+    }, [
+      textEditingState?.addTextToPage,
+      currentPage,
+      textEditingState,
+      onTextAdd,
+    ]);
+
     useEffect(() => {
       if (selectedTextId && textEditingState) {
         const pageNumber = Object.keys(textElements).find((page) =>
@@ -813,20 +1001,100 @@ const Allpagespreview = memo(
         );
 
         if (pageNumber) {
-          handleTextStyleUpdate(selectedTextId, parseInt(pageNumber), {
-            fontSize: textEditingState.selectedSize,
-            fontFamily: textEditingState.selectedFont,
-            color: textEditingState.selectedColor,
-            backgroundColor: textEditingState.selectedBgColor,
-            isBold: textEditingState.isBold,
-            isItalic: textEditingState.isItalic,
-            isUnderline: textEditingState.isUnderline,
-            alignment: textEditingState.selectedAlignment,
-            opacity: textEditingState.opacity,
-          });
+          // CRITICAL FIX: Get current text element first
+          const currentElement = textElements[pageNumber]?.find(
+            (text) => text.id === selectedTextId
+          );
+
+          // Only update if there's actually a change to prevent unnecessary re-renders
+          if (currentElement) {
+            const hasChanges =
+              currentElement.fontSize !== textEditingState.selectedSize ||
+              currentElement.fontFamily !== textEditingState.selectedFont ||
+              currentElement.color !== textEditingState.selectedColor ||
+              currentElement.backgroundColor !==
+                textEditingState.selectedBgColor ||
+              currentElement.isBold !== textEditingState.isBold ||
+              currentElement.isItalic !== textEditingState.isItalic ||
+              currentElement.isUnderline !== textEditingState.isUnderline ||
+              currentElement.alignment !== textEditingState.selectedAlignment ||
+              currentElement.opacity !== textEditingState.opacity;
+
+            if (hasChanges) {
+              // CRITICAL FIX: Don't change position when updating font size
+              const updatedStyle = {
+                fontSize: textEditingState.selectedSize,
+                fontFamily: textEditingState.selectedFont,
+                color: textEditingState.selectedColor,
+                backgroundColor: textEditingState.selectedBgColor,
+                isBold: textEditingState.isBold,
+                isItalic: textEditingState.isItalic,
+                isUnderline: textEditingState.isUnderline,
+                alignment: textEditingState.selectedAlignment,
+                opacity: textEditingState.opacity,
+                // KEEP existing position and dimensions to prevent jumps
+                x: currentElement.x,
+                y: currentElement.y,
+                width: currentElement.width,
+                height: currentElement.height,
+              };
+
+              handleTextStyleUpdate(
+                selectedTextId,
+                parseInt(pageNumber),
+                updatedStyle
+              );
+            }
+          }
         }
       }
     }, [textEditingState, selectedTextId, textElements, handleTextStyleUpdate]);
+
+    useEffect(() => {
+      if (selectedTextId && textEditingState?.selectedSize) {
+        const pageNumber = Object.keys(textElements).find((page) =>
+          textElements[page]?.some((text) => text.id === selectedTextId)
+        );
+
+        if (pageNumber) {
+          const currentElement = textElements[pageNumber]?.find(
+            (text) => text.id === selectedTextId
+          );
+
+          if (
+            currentElement &&
+            currentElement.fontSize !== textEditingState.selectedSize
+          ) {
+            // Add a small delay for smoother font size transitions
+            const timeoutId = setTimeout(() => {
+              // Auto-adjust height based on font size if needed
+              const fontSizeRatio =
+                textEditingState.selectedSize / currentElement.fontSize;
+              const newHeight = Math.max(
+                currentElement.height * fontSizeRatio,
+                textEditingState.selectedSize * 1.5 // Minimum height based on font size
+              );
+
+              handleTextStyleUpdate(selectedTextId, parseInt(pageNumber), {
+                fontSize: textEditingState.selectedSize,
+                height: newHeight, // Auto-adjust height
+                // Keep position the same
+                x: currentElement.x,
+                y: currentElement.y,
+                width: currentElement.width,
+              });
+            }, 50); // 50ms delay for smooth transition
+
+            return () => clearTimeout(timeoutId);
+          }
+        }
+      }
+    }, [
+      textEditingState?.selectedSize,
+      selectedTextId,
+      textElements,
+      handleTextStyleUpdate,
+    ]);
 
     // Handle delete from parent toolbar
     useEffect(() => {
@@ -869,37 +1137,7 @@ const Allpagespreview = memo(
       return () =>
         document.removeEventListener("mousedown", handleClickOutside, true);
     }, [textEditingState?.showTextToolbar]);
-    const smoothTextEditingStyles = `
-  .text-element {
-    transition: none !important;
-  }
-  
-  .text-element:not(.dragging):not(.resizing) {
-    transition: box-shadow 0.1s ease !important;
-  }
-  
-  .text-element.dragging,
-  .text-element.resizing {
-    transition: none !important;
-    transform: translateZ(0); /* Enable GPU acceleration */
-    will-change: transform;
-  }
-  
-  .resize-handle {
-    transition: none !important;
-    transform: translateZ(0);
-  }
-  
-  .delete-btn {
-    transition: none !important;
-  }
-  
-  /* Smooth text overlay container */
-  .text-overlay {
-    transform: translateZ(0);
-    will-change: contents;
-  }
-`;
+
     // Text overlay component
     const renderTextOverlay = useCallback(
       (pageNumber) => {
@@ -927,6 +1165,7 @@ const Allpagespreview = memo(
                   handleTextChange(textElement.id, pageNumber, newText)
                 }
                 pageScale={pageScale}
+                zoom={userZoom} // CRITICAL: Pass userZoom directly instead of currentZoom
               />
             ))}
           </div>
@@ -936,6 +1175,7 @@ const Allpagespreview = memo(
         textElements,
         selectedTextId,
         pageScale,
+        userZoom, // CRITICAL: Add userZoom to dependencies
         handleTextStyleUpdate,
         handleTextDelete,
         handleTextChange,
@@ -978,9 +1218,9 @@ const Allpagespreview = memo(
 
                 <div className="relative" data-page-number={currentPage}>
                   <div
-                    className="transition-all duration-300 hover:shadow-2xl relative cursor-pointer"
+                    className="transition-all duration-300 hover:shadow-2xl relative"
                     style={{ transformOrigin: "center center" }}
-                    onClick={(e) => handlePageClick(e, currentPage)}
+                    // REMOVED: onClick handler for page click
                   >
                     <Page
                       pageNumber={currentPage}
@@ -1036,13 +1276,13 @@ const Allpagespreview = memo(
                   {/* Left page */}
                   <div className="flex-shrink-0" data-page-number={leftPage}>
                     <div
-                      className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative cursor-pointer ${
+                      className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative ${
                         currentPage === leftPage
                           ? "ring-2 ring-red-600 ring-offset-2"
                           : ""
                       }`}
                       style={{ transformOrigin: "top left" }}
-                      onClick={(e) => handlePageClick(e, leftPage)}
+                      // REMOVED: onClick handler for page click
                     >
                       <Page
                         pageNumber={leftPage}
@@ -1071,13 +1311,13 @@ const Allpagespreview = memo(
                   {rightPage && (
                     <div className="flex-shrink-0" data-page-number={rightPage}>
                       <div
-                        className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative cursor-pointer ${
+                        className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative ${
                           currentPage === rightPage
                             ? "ring-2 ring-red-600 ring-offset-2"
                             : ""
                         }`}
                         style={{ transformOrigin: "top left" }}
-                        onClick={(e) => handlePageClick(e, rightPage)}
+                        // REMOVED: onClick handler for page click
                       >
                         <Page
                           pageNumber={rightPage}
@@ -1139,13 +1379,13 @@ const Allpagespreview = memo(
                     {/* PDF Page */}
                     <div className="w-fit">
                       <div
-                        className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative cursor-pointer ${
+                        className={`transition-all duration-300 hover:ring-red-100 hover:ring-4 hover:ring-offset-2 relative ${
                           isCurrentPage
                             ? "ring-2 ring-red-600 ring-offset-2"
                             : ""
                         }`}
                         style={{ transformOrigin: "top left" }}
-                        onClick={(e) => handlePageClick(e, currentPageNumber)}
+                        // REMOVED: onClick handler for page click
                       >
                         <Page
                           pageNumber={currentPageNumber}
@@ -1286,29 +1526,9 @@ const Allpagespreview = memo(
         <div className="w-full relative h-full overflow-hidden">
           {renderPreview()}
 
-          {/* Remove Button - Only show if showRemoveButton is true */}
-          {showRemoveButton && onRemove && (
-            <div className="absolute top-2 right-2 flex gap-1 z-30">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemove(file.id);
-                }}
-                className="w-8 h-8 bg-white/90 border hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110"
-                title="Remove file"
-              >
-                <X className="w-4 h-4 text-red-500" />
-              </button>
-            </div>
-          )}
+          {/* REMOVED: Remove Button - No longer showing remove button */}
 
-          {/* Text editing indicator when text tool is active */}
-          {textEditingState?.showTextToolbar && (
-            <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs px-3 py-1 rounded-full font-medium flex items-center gap-2 z-30 shadow-lg">
-              <Type className="w-3 h-3" />
-              <span>Click to add text</span>
-            </div>
-          )}
+          {/* REMOVED: Text editing indicator - No longer showing "Click to add text" */}
 
           {/* Selected text info */}
           {selectedTextId && textEditingState?.showTextToolbar && (

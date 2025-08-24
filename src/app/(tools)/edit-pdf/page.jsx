@@ -256,8 +256,9 @@ export default function PDFViewer() {
     selectedAlignment: "left",
     opacity: 1,
     deleteRequested: false,
+    addTextToPage: false, // ✅ NEW: Flag to trigger text addition
+    onTextAdded: null, // ✅ NEW: Callback after text is added
   };
-
   const [textEditingState, setTextEditingState] = useState(initialTextState);
   const [allTextElements, setAllTextElements] = useState([]);
 
@@ -672,15 +673,65 @@ export default function PDFViewer() {
   // //////////////////////////////////////// //
   // toggle function
 
-  // Toggle text editing mode
+  // NEW: Function to add text directly to current page
+  const addTextToCurrentPage = useCallback(() => {
+    if (!currentFile || !currentPage) return;
+
+    const textId = `text_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+
+    const newTextElement = {
+      id: textId,
+      pageNumber: currentPage,
+      x: 100, // Default position
+      y: 100, // Default position
+      width: 120,
+      height: 30,
+      text: "New Text",
+      fontSize: textEditingState?.selectedSize || 16,
+      fontFamily: textEditingState?.selectedFont || "Arial",
+      color: textEditingState?.selectedColor || "#000000",
+      backgroundColor: textEditingState?.selectedBgColor || "transparent",
+      isBold: textEditingState?.isBold || false,
+      isItalic: textEditingState?.isItalic || false,
+      isUnderline: textEditingState?.isUnderline || false,
+      alignment: textEditingState?.selectedAlignment || "left",
+      opacity: textEditingState?.opacity || 1,
+      isEditing: true,
+    };
+
+    setAllTextElements((prev) => [...prev, newTextElement]);
+
+    if (onTextAdd) {
+      onTextAdd(newTextElement);
+    }
+  }, [currentFile, currentPage, textEditingState]);
+
+  // UPDATED: Toggle text editing mode - ab direct text add hoga
   const handleTextButtonClick = () => {
     setTextEditingState((prev) => {
       if (prev.showTextToolbar) {
         // Close text editing mode - reset to initial state
         return initialTextState;
       }
-      // Open text editing mode
-      return { ...initialTextState, showTextToolbar: true };
+
+      // Open text editing mode aur direct text add karo
+      const newState = {
+        ...initialTextState,
+        showTextToolbar: true,
+        addTextToPage: true, // ✅ Signal child to add text
+        onTextAdded: () => {
+          // ✅ Reset flag after text is added
+          setTextEditingState((prev) => ({
+            ...prev,
+            addTextToPage: false,
+            onTextAdded: null,
+          }));
+        },
+      };
+
+      return newState;
     });
   };
 
@@ -830,11 +881,11 @@ export default function PDFViewer() {
   }
 
   return (
-    <div className="md:h-[calc(100vh-82px)] md:overflow-hidden">
+    <div className="md:h-[calc(100vh-82px)]">
       <div className="grid grid-cols-1 md:grid-cols-12 border h-full">
         {/* Thumbnails Sidebar - Left (1.5 columns) */}
         {isThumbnailVisible && (
-          <div className="hidden md:flex justify-center items-start md:col-span-1 lg:col-span-2 bg-gray-50 border-r overflow-y-auto custom-scrollbar">
+          <div className="hidden md:h-[calc(100vh-82px)] md:flex justify-center items-start md:col-span-1 lg:col-span-2 bg-gray-50 border-r overflow-y-auto custom-scrollbar">
             <div className="w-[80%] p-3">
               <h3 className="text-sm font-semibold text-gray-700 mb-3 text-center">
                 Pages ({currentFilePages})
@@ -876,7 +927,7 @@ export default function PDFViewer() {
             {isThumbnailVisible ? <ChevronLeft /> : <ChevronRight />}
           </div>
           <div className="w-full">
-            <div className="flex items-center gap-3 p-2 pl-10 bg-white border-b border-gray-200">
+            <div className="flex items-center gap-3 p-2 pl-10 bg-white border-b border-gray-20 relative">
               <button className="p-2 rounded hover:bg-gray-100 transition-colors">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -936,7 +987,7 @@ export default function PDFViewer() {
               </button>
             </div>
             {textEditingState.showTextToolbar && (
-              <div className="flex items-center gap-2 p-2 ml-5 bg-gray-50 border-b border-gray-200">
+              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200">
                 {/* Text Icon */}
                 <span className="font-bold text-lg px-2">T</span>
 
@@ -1135,7 +1186,7 @@ export default function PDFViewer() {
           </div>
 
           {/* PDF Preview Area */}
-          <div className="h-[calc(100vh-36px-3.3rem)] md:h-[calc(100vh-36px-3.2rem)] w-full bg-gray-100 overflow-hidden">
+          <div className="md:h-[calc(100vh-143px)] h-[calc(100vh-82px)] md w-full bg-gray-100 overflow-hidden">
             <div
               ref={mainViewerRef}
               className="h-full w-full max-w-5xl mx-auto overflow-auto custom-scrollbar"
@@ -1163,7 +1214,7 @@ export default function PDFViewer() {
                           isPasswordProtected={passwordProtectedFiles.has(
                             file.id
                           )}
-                          showRemoveButton={true}
+                          showRemoveButton={false} // ✅ CHANGED: No remove button
                           onRemove={() => removeFile(file.id)}
                           userZoom={zoom}
                           currentPage={currentPage}
@@ -1172,11 +1223,11 @@ export default function PDFViewer() {
                           showSpread={currentLayout === "spread"}
                           layoutType={currentLayout}
                           onPageChange={handlePageChange}
-                          // CORRECTED: Text editing props
+                          // Text editing props
                           textEditingState={textEditingState}
                           onTextAdd={handleTextAdd}
                           onTextUpdate={handleTextUpdate}
-                          onTextDelete={handleTextDelete} // Changed from handleDelete to handleTextDelete
+                          onTextDelete={handleTextDelete}
                         />
                       </div>
                     </div>
@@ -1186,24 +1237,22 @@ export default function PDFViewer() {
 
               {/* Zoom Controls Overlay */}
 
-              <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-20">
-                <div className="bg-white shadow-lg rounded-lg border p-2">
-                  <ZoomControls
-                    zoom={zoom}
-                    onZoomIn={handleZoomIn}
-                    onZoomOut={handleZoomOut}
-                    onZoomChange={handleZoomChange}
-                    onFitToWidth={handleFitToWidth}
-                    onDownload={handleDownload}
-                    currentPage={currentPage}
-                    totalPages={currentFilePages}
-                    onPageChange={handlePageNavigation}
-                    onLayoutChange={handleLayoutChange} // New prop
-                    currentLayout={currentLayout} // New prop
-                    show={files.length > 0}
-                    className=""
-                  />
-                </div>
+              <div className="fixed bottom-0 left-1/2 transform -translate-x-1/2 z-20">
+                <ZoomControls
+                  zoom={zoom}
+                  onZoomIn={handleZoomIn}
+                  onZoomOut={handleZoomOut}
+                  onZoomChange={handleZoomChange}
+                  onFitToWidth={handleFitToWidth}
+                  onDownload={handleDownload}
+                  currentPage={currentPage}
+                  totalPages={currentFilePages}
+                  onPageChange={handlePageNavigation}
+                  onLayoutChange={handleLayoutChange} // New prop
+                  currentLayout={currentLayout} // New prop
+                  show={files.length > 0}
+                  className=""
+                />
               </div>
             </div>
           </div>
