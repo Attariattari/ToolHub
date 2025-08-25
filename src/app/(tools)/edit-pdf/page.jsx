@@ -237,7 +237,6 @@ export default function PDFViewer() {
 
   const [isThumbnailVisible, setIsThumbnailVisible] = useState(true);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   // Zoom states
@@ -258,9 +257,15 @@ export default function PDFViewer() {
     addTextToPage: false, // ✅ NEW: Flag to trigger text addition
     onTextAdded: null, // ✅ NEW: Callback after text is added
   };
+  const initialImageState = {
+    showImageToolbar: false,
+    selectedImageFile: null,
+  };
   const [textEditingState, setTextEditingState] = useState(initialTextState);
+  const [imageEditingState, setImageEditingState] = useState(initialImageState);
   const [allTextElements, setAllTextElements] = useState([]);
-
+  const [clearAllTextElements, setClearAllTextElements] = useState(false);
+  const [deleteSpecificElement, setDeleteSpecificElement] = useState(null);
   const fonts = [
     "Arial",
     "Helvetica",
@@ -302,7 +307,9 @@ export default function PDFViewer() {
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
   const mainViewerRef = useRef(null);
-
+  const handleDeleteSpecificComplete = () => {
+    setDeleteSpecificElement(null);
+  };
   // Check if a file is password protected
   const checkPasswordProtection = useCallback(async (file, id) => {
     try {
@@ -666,49 +673,34 @@ export default function PDFViewer() {
   if (isUploading) {
     return <ProgressScreen uploadProgress={uploadProgress} />;
   }
+  // Text editing handlers
+  const closeAllToolbars = (fromButton = null) => {
+    const wasTextToolbarOpen = textEditingState.showTextToolbar;
+    const wasImageToolbarOpen = imageEditingState.showImageToolbar;
 
-  // //////////////////////////////////////// //
-  // For Text Exit
-  // //////////////////////////////////////// //
-  // toggle function
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+      addTextToPage: false,
+      onTextAdded: null,
+    }));
 
-  // NEW: Function to add text directly to current page
-  const addTextToCurrentPage = useCallback(() => {
-    if (!currentFile || !currentPage) return;
-
-    const textId = `text_${Date.now()}_${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
-
-    const newTextElement = {
-      id: textId,
-      pageNumber: currentPage,
-      x: 100, // Default position
-      y: 100, // Default position
-      width: 120,
-      height: 30,
-      text: "New Text",
-      fontSize: textEditingState?.selectedSize || 16,
-      fontFamily: textEditingState?.selectedFont || "Arial",
-      color: textEditingState?.selectedColor || "#000000",
-      backgroundColor: textEditingState?.selectedBgColor || "transparent",
-      isBold: textEditingState?.isBold || false,
-      isItalic: textEditingState?.isItalic || false,
-      isUnderline: textEditingState?.isUnderline || false,
-      alignment: textEditingState?.selectedAlignment || "left",
-      opacity: textEditingState?.opacity || 1,
-      isEditing: true,
-    };
-
-    setAllTextElements((prev) => [...prev, newTextElement]);
-
-    if (onTextAdd) {
-      onTextAdd(newTextElement);
+    // Sirf tab clear karo jab text se image pe switch kar rahe hain
+    if (wasTextToolbarOpen && fromButton === "image") {
+      // Clear all text elements from state
+      setAllTextElements([]);
+      // CRITICAL FIX: Clear text elements from child component
+      setClearAllTextElements(true);
     }
-  }, [currentFile, currentPage, textEditingState]);
 
+    setImageEditingState((prev) => ({
+      ...prev,
+      showImageToolbar: false,
+    }));
+  };
   // UPDATED: Toggle text editing mode - ab direct text add hoga
   const handleTextButtonClick = () => {
+    closeAllToolbars("text");
     setTextEditingState((prev) => {
       // Open text editing mode aur direct text add karo
       const newState = {
@@ -859,6 +851,17 @@ export default function PDFViewer() {
   // //////////////////////////////////////// //
   // For Text Exit
   // //////////////////////////////////////// //
+
+  const handleImageButtonClick = () => {
+    closeAllToolbars("image");
+
+    // Phir image wala open karo
+    setImageEditingState((prev) => ({
+      ...prev,
+      showImageToolbar: true,
+    }));
+  };
+
   // Show upload screen if no files
   if (files.length === 0) {
     return (
@@ -942,14 +945,21 @@ export default function PDFViewer() {
                 className={`p-3 rounded-lg transition-all duration-200 ${
                   textEditingState.showTextToolbar
                     ? "bg-red-100 text-red-600 ring-2 ring-red-400"
-                    : "hover:bg-gray-100 text-gray-700"
+                    : "hover:bg-red-100 text-gray-700"
                 }`}
                 onClick={handleTextButtonClick}
                 title="Add Text Tool"
               >
                 <Type className="w-5 h-5" />
               </button>
-              <button className="p-2 rounded hover:bg-gray-100 transition-colors">
+              <button
+                className={`p-3 rounded-lg transition-all duration-200 ${
+                  imageEditingState.showImageToolbar
+                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                    : "hover:bg-red-100 text-gray-700"
+                }`}
+                onClick={handleImageButtonClick}
+              >
                 <svg xmlns="http://www.w3.org/2000/svg" height="16" width="20">
                   <path
                     fill="#707078"
@@ -1180,6 +1190,11 @@ export default function PDFViewer() {
                 </button>
               </div>
             )}
+            {imageEditingState.showImageToolbar && (
+              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200">
+                Hello
+              </div>
+            )}
           </div>
 
           {/* PDF Preview Area */}
@@ -1222,6 +1237,14 @@ export default function PDFViewer() {
                           onTextAdd={handleTextAdd}
                           onTextUpdate={handleTextUpdate}
                           onTextDelete={handleTextDelete}
+                          clearAllTextElements={clearAllTextElements} // ✅ NEW PROP
+                          onClearAllComplete={() =>
+                            setClearAllTextElements(false)
+                          } // ✅ CALLBACK
+                          deleteSpecificElement={deleteSpecificElement} // NEW PROP
+                          onDeleteSpecificComplete={() =>
+                            setDeleteSpecificElement(null)
+                          }
                         />
                       </div>
                     </div>
@@ -1252,15 +1275,177 @@ export default function PDFViewer() {
           </div>
         </div>
 
-        {/* Right Sidebar - Same as before (3 columns) */}
+        {/* Right Sidebar - Text Elements List */}
         <div className="hidden md:flex md:col-span-3 overflow-y-auto custom-scrollbar border-l flex-col">
-          <div className="flex flex-col justify-between h-full">
+          <div className="flex flex-col h-full">
+            {/* Header */}
             <div className="border-b border-gray-100">
               <h3 className="sticky top-0 bg-white text-2xl h-16 flex justify-center items-center font-bold text-gray-900 text-center">
                 Edit PDF
               </h3>
-            </div>{" "}
-          </div>{" "}
+            </div>
+
+            {/* Content Area */}
+            <div className="flex-1 p-4">
+              {/* Remove All Button */}
+              {allTextElements.length > 0 && (
+                <div className="flex justify-end mb-4">
+                  <button
+                    onClick={() => {
+                      // Clear all text elements from state
+                      setAllTextElements([]);
+
+                      // CRITICAL FIX: Clear text elements from child component
+                      setClearAllTextElements(true);
+
+                      console.log("Removing all text elements");
+                    }}
+                    className="text-red-500 hover:text-red-600 text-sm font-medium transition-colors"
+                  >
+                    Remove all
+                  </button>
+                </div>
+              )}
+
+              {/* Text Elements by Page */}
+              {allTextElements.length === 0 ? (
+                <div className="text-center bg-red-50 border-2 border-dashed border-red-200 p-8 rounded-lg text-red-600 mt-8 transition-colors hover:bg-red-100 hover:border-red-300">
+                  <Type className="w-16 h-16 mx-auto mb-4 text-red-400" />
+                  <h3 className="text-lg font-semibold text-red-700 mb-2">
+                    No text elements added
+                  </h3>
+                  <p className="text-red-500 mb-4">
+                    Get started by adding your first text element to the canvas
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Group text elements by page */}
+                  {Object.entries(
+                    allTextElements.reduce((acc, text) => {
+                      const page = text.pageNumber;
+                      if (!acc[page]) acc[page] = [];
+                      acc[page].push(text);
+                      return acc;
+                    }, {})
+                  )
+                    .sort(([a], [b]) => parseInt(a) - parseInt(b)) // Sort pages numerically
+                    .map(([pageNumber, pageTexts]) => (
+                      <div key={`page-${pageNumber}`}>
+                        {/* Page Header */}
+                        <div className="flex items-center justify-between mb-3 border-b border-gray-200 pb-2">
+                          <h4 className="text-sm font-semibold text-gray-700">
+                            Page {pageNumber}
+                          </h4>
+                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                            {pageTexts.length} text
+                            {pageTexts.length !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        {/* Text Elements for this page */}
+                        <div className="space-y-2">
+                          {pageTexts.map((textElement, index) => (
+                            <div
+                              key={textElement.id}
+                              className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors group"
+                            >
+                              {/* Text Icon and Content */}
+                              <div className="flex items-center gap-3 flex-1">
+                                {/* Text Icon */}
+                                <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600">
+                                  <Type className="w-4 h-4" />
+                                </div>
+
+                                {/* Text Content */}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-900">
+                                    {(() => {
+                                      const text =
+                                        textElement.text ||
+                                        `New Text ${index + 1}`;
+                                      return text.length > 20
+                                        ? text.substring(0, 20) + "..."
+                                        : text;
+                                    })()}
+                                  </p>
+                                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                                    <span>{textElement.fontFamily}</span>
+                                    <span>•</span>
+                                    <span>{textElement.fontSize}px</span>
+                                    <span>•</span>
+                                    <div
+                                      className="w-3 h-3 rounded border border-gray-300"
+                                      style={{
+                                        backgroundColor: textElement.color,
+                                      }}
+                                    ></div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Action Buttons */}
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* Edit Button */}
+                                <button
+                                  onClick={() => {
+                                    // Scroll to the page and highlight the text element
+                                    handleThumbnailClick(parseInt(pageNumber));
+                                  }}
+                                  className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                  title="Edit text"
+                                >
+                                  <svg
+                                    className="w-4 h-4"
+                                    fill="currentColor"
+                                    viewBox="0 0 20 20"
+                                  >
+                                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                                  </svg>
+                                </button>
+
+                                {/* Delete Button */}
+                                <button
+                                  onClick={() => {
+                                    // Remove from parent state
+                                    setAllTextElements((prev) =>
+                                      prev.filter(
+                                        (t) => t.id !== textElement.id
+                                      )
+                                    );
+
+                                    // Signal child component to delete specific element
+                                    setDeleteSpecificElement({
+                                      textId: textElement.id,
+                                      pageNumber: textElement.pageNumber,
+                                    });
+                                  }}
+                                  className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                  title="Delete text"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer Action Button */}
+            {allTextElements.length > 0 && (
+              <div className="border-t border-gray-100 p-4">
+                <button className="w-full bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
+                  <span>Edit PDF</span>
+                  <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center">
+                    <ChevronRight className="w-3 h-3 text-red-500" />
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

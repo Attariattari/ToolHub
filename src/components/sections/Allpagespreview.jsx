@@ -36,6 +36,7 @@ const ResizableTextElement = ({
   const [clickCount, setClickCount] = useState(0);
   const elementRef = useRef(null);
   const textareaRef = useRef(null);
+  const measureRef = useRef(null); // For measuring text dimensions
   const clickTimeoutRef = useRef(null);
 
   // Calculate scaled dimensions from base coordinates
@@ -49,6 +50,75 @@ const ResizableTextElement = ({
     return Math.max(8, textElement.fontSize);
   }, [textElement.fontSize]);
 
+  // Function to measure text dimensions
+  const measureTextDimensions = useCallback((text, width) => {
+    if (!measureRef.current) return { width: 0, height: 0 };
+
+    measureRef.current.style.width = width + "px";
+    measureRef.current.textContent = text || "A"; // Use 'A' as fallback for empty text
+
+    return {
+      width: measureRef.current.scrollWidth,
+      height: measureRef.current.scrollHeight,
+    };
+  }, []);
+
+  // Auto-resize function
+  const autoResizeElement = useCallback(
+    (text) => {
+      if (!elementRef.current || textElement.isEditing) return;
+
+      const currentWidth = textElement.width;
+      const currentHeight = textElement.height;
+      const minWidth = Math.max(80, calculatedFontSize * 4);
+      const minHeight = Math.max(40, calculatedFontSize * 2);
+
+      // Measure text with current width
+      const measured = measureTextDimensions(text, (currentWidth * zoom) / 100);
+      const measuredBaseHeight = (measured.height * 100) / zoom;
+
+      let newHeight = Math.max(minHeight, measuredBaseHeight + 16); // Add padding
+      let newWidth = currentWidth;
+
+      // If text is overflowing horizontally, we might need to increase width
+      const lines = (text || "").split("\n");
+      const maxLineLength = Math.max(...lines.map((line) => line.length));
+
+      // Rough estimation: if line is too long, expand width
+      const charWidth = calculatedFontSize * 0.6; // Approximate character width
+      const estimatedWidth = maxLineLength * charWidth;
+      const maxWidthForPage =
+        ((elementRef.current
+          ?.closest("[data-page-number]")
+          ?.querySelector(".react-pdf__Page")
+          ?.getBoundingClientRect()?.width || 500) *
+          100) /
+        zoom;
+
+      if (
+        estimatedWidth > currentWidth &&
+        newWidth < maxWidthForPage - textElement.x
+      ) {
+        newWidth = Math.min(
+          maxWidthForPage - textElement.x,
+          Math.max(currentWidth, estimatedWidth + 20)
+        );
+      }
+
+      // Only update if dimensions actually changed
+      if (
+        Math.abs(newHeight - currentHeight) > 5 ||
+        Math.abs(newWidth - currentWidth) > 5
+      ) {
+        onUpdate({
+          width: newWidth,
+          height: newHeight,
+        });
+      }
+    },
+    [textElement, calculatedFontSize, zoom, measureTextDimensions, onUpdate]
+  );
+
   // Auto-focus textarea when editing starts
   useEffect(() => {
     if (textElement.isEditing && textareaRef.current) {
@@ -59,6 +129,79 @@ const ResizableTextElement = ({
       return () => clearTimeout(timeoutId);
     }
   }, [textElement.isEditing]);
+
+  // Function to dynamically adjust text layout based on element dimensions
+  const adjustTextLayout = useCallback(() => {
+    if (!elementRef.current || !measureRef.current || textElement.isEditing)
+      return;
+
+    const currentWidth = (textElement.width * zoom) / 100;
+    const text = textElement.text || "";
+
+    if (!text) return;
+
+    // Set the measuring element to match current element width and styling
+    measureRef.current.style.width = Math.max(60, currentWidth - 12) + "px"; // Subtract padding
+    measureRef.current.style.fontSize = `${calculatedFontSize}px`;
+    measureRef.current.style.fontFamily = textElement.fontFamily;
+    measureRef.current.style.fontWeight = textElement.isBold
+      ? "bold"
+      : "normal";
+    measureRef.current.style.fontStyle = textElement.isItalic
+      ? "italic"
+      : "normal";
+    measureRef.current.textContent = text;
+
+    // Force a reflow to get accurate measurements
+    measureRef.current.offsetHeight;
+
+    const measuredHeight = measureRef.current.scrollHeight;
+    const baseHeight = (measuredHeight * 100) / zoom;
+    const minHeight = Math.max(40, calculatedFontSize * 2);
+    const newHeight = Math.max(minHeight, baseHeight + 16); // Add padding
+
+    // Update height if there's a significant difference
+    if (Math.abs(newHeight - textElement.height) > 8) {
+      onUpdate({ height: newHeight });
+    }
+  }, [
+    textElement.width,
+    textElement.height,
+    textElement.text,
+    textElement.fontFamily,
+    textElement.fontSize,
+    textElement.isBold,
+    textElement.isItalic,
+    textElement.isEditing,
+    zoom,
+    calculatedFontSize,
+    onUpdate,
+  ]);
+
+  // Auto-adjust layout when dimensions or text changes
+  useEffect(() => {
+    if (!textElement.isEditing && textElement.text) {
+      const timeoutId = setTimeout(() => {
+        adjustTextLayout();
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [
+    textElement.width,
+    textElement.text,
+    textElement.fontSize,
+    textElement.fontFamily,
+    textElement.isBold,
+    textElement.isItalic,
+    adjustTextLayout,
+  ]);
+
+  // Separate effect for immediate text changes
+  useEffect(() => {
+    if (!textElement.isEditing && textElement.text) {
+      adjustTextLayout();
+    }
+  }, [textElement.text, adjustTextLayout]);
 
   // Function to get PDF page boundaries
   const getPageBoundaries = useCallback(() => {
@@ -249,13 +392,15 @@ const ResizableTextElement = ({
         newX = Math.max(0, Math.min(pageBaseWidth - newWidth, newX));
         newY = Math.max(0, Math.min(pageBaseHeight - newHeight, newY));
 
-        // Update with base coordinates
-        onUpdate({
+        // Update with base coordinates and trigger immediate layout adjustment
+        const newUpdate = {
           width: newWidth,
           height: newHeight,
           x: newX,
           y: newY,
-        });
+        };
+
+        onUpdate(newUpdate);
       }
     },
     [
@@ -277,7 +422,14 @@ const ResizableTextElement = ({
     setIsDragging(false);
     setIsResizing(false);
     setCurrentResizeHandle(null);
-  }, []);
+
+    // Adjust text layout after resizing is complete
+    if (isResizing) {
+      setTimeout(() => {
+        adjustTextLayout();
+      }, 100);
+    }
+  }, [isResizing, adjustTextLayout]);
 
   // Throttled mouse move for better performance
   const throttledMouseMove = useCallback(
@@ -321,7 +473,22 @@ const ResizableTextElement = ({
       e.preventDefault();
       onUpdate({ isEditing: false });
     } else if (e.key === "Enter" && e.shiftKey) {
-      // Allow new line
+      // Allow new line and trigger resize
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+          const scrollHeight = textareaRef.current.scrollHeight;
+          textareaRef.current.style.height = scrollHeight + "px";
+
+          const newElementHeight = Math.max(
+            40,
+            (scrollHeight * 100) / zoom + 16
+          );
+          if (Math.abs(newElementHeight - textElement.height) > 5) {
+            onUpdate({ height: newElementHeight });
+          }
+        }
+      }, 10);
     } else if (e.key === "Escape") {
       e.preventDefault();
       onUpdate({ isEditing: false });
@@ -330,13 +497,32 @@ const ResizableTextElement = ({
 
   const handleTextareaChange = (e) => {
     e.stopPropagation();
-    onTextChange(e.target.value);
+    const newText = e.target.value;
+    onTextChange(newText);
+
+    // Auto-resize textarea during typing to fit content
+    if (textareaRef.current) {
+      // Reset height to auto to get the correct scrollHeight
+      textareaRef.current.style.height = "auto";
+      const scrollHeight = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = scrollHeight + "px";
+
+      // Update element height based on textarea content
+      const newElementHeight = Math.max(40, (scrollHeight * 100) / zoom + 16);
+      if (Math.abs(newElementHeight - textElement.height) > 5) {
+        onUpdate({ height: newElementHeight });
+      }
+    }
   };
 
   const handleTextareaBlur = (e) => {
     e.stopPropagation();
     if (!isDragging && !isResizing) {
       onUpdate({ isEditing: false });
+      // Adjust layout after editing ends
+      setTimeout(() => {
+        adjustTextLayout();
+      }, 100);
     }
   };
 
@@ -399,166 +585,211 @@ const ResizableTextElement = ({
   }, []);
 
   return (
-    <div
-      ref={elementRef}
-      className={`absolute text-element select-none ${
-        isSelected ? "ring-2 ring-blue-400 ring-opacity-60" : ""
-      } ${
-        isDragging
-          ? "cursor-grabbing"
-          : isSelected && !textElement.isEditing
-          ? "cursor-grab"
-          : "cursor-default"
-      }`}
-      style={{
-        left: scaledX,
-        top: scaledY,
-        width: scaledWidth,
-        height: scaledHeight,
-        fontSize: `${calculatedFontSize}px`,
-        fontFamily: textElement.fontFamily,
-        color: textElement.color,
-        backgroundColor:
-          textElement.backgroundColor !== "transparent"
-            ? textElement.backgroundColor
-            : "rgba(255, 255, 255, 0.9)",
-        fontWeight: textElement.isBold ? "bold" : "normal",
-        fontStyle: textElement.isItalic ? "italic" : "normal",
-        textDecoration: textElement.isUnderline ? "underline" : "none",
-        textAlign: textElement.alignment,
-        opacity: textElement.opacity || 1,
-        padding: "4px 6px",
-        borderRadius: "4px",
-        zIndex: isSelected ? 20 : 10,
-        minWidth: Math.max(60, calculatedFontSize * 3) + "px",
-        minHeight: Math.max(30, calculatedFontSize * 1.8) + "px",
-        boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
-        border: textElement.isEditing
-          ? "2px solid #3b82f6"
-          : isSelected
-          ? "1px solid #3b82f6"
-          : "1px solid rgba(0,0,0,0.1)",
-        pointerEvents: "auto",
-        transition: isDragging || isResizing ? "none" : "all 0.2s ease",
-        transform: "translateZ(0)",
-        willChange: isDragging || isResizing ? "transform" : "auto",
-      }}
-      onMouseDown={handleMouseDown}
-      onClick={handleClick}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      {/* Text content */}
-      {textElement.isEditing ? (
-        <textarea
-          ref={textareaRef}
-          value={textElement.text}
-          onChange={handleTextareaChange}
-          onBlur={handleTextareaBlur}
-          onKeyDown={handleInputKeyDown}
-          onClick={handleTextareaClick}
-          onMouseDown={(e) => e.stopPropagation()}
-          className="w-full h-full bg-transparent border-none outline-none resize-none"
-          style={{
-            fontSize: "inherit",
-            fontFamily: "inherit",
-            color: "inherit",
-            fontWeight: "inherit",
-            fontStyle: "inherit",
-            textDecoration: "inherit",
-            textAlign: "inherit",
-            padding: 0,
-            margin: 0,
-            lineHeight: "1.4",
-          }}
-          placeholder="Enter text..."
-          spellCheck={false}
-          autoComplete="off"
-        />
-      ) : (
-        <div
-          className="w-full h-full flex items-center overflow-hidden"
-          style={{
-            wordWrap: "break-word",
-            overflowWrap: "break-word",
-            lineHeight: "1.4",
-            whiteSpace: "pre-wrap",
-            pointerEvents: "auto",
-          }}
-        >
-          {textElement.text}
-        </div>
-      )}
+    <>
+      {/* Hidden element for measuring text dimensions */}
+      <div
+        ref={measureRef}
+        style={{
+          position: "absolute",
+          top: -9999,
+          left: -9999,
+          visibility: "hidden",
+          fontSize: `${calculatedFontSize}px`,
+          fontFamily: textElement.fontFamily,
+          fontWeight: textElement.isBold ? "bold" : "normal",
+          fontStyle: textElement.isItalic ? "italic" : "normal",
+          lineHeight: "1.4",
+          whiteSpace: "pre-wrap",
+          wordWrap: "break-word",
+          overflowWrap: "break-word",
+          padding: "4px 6px",
+          boxSizing: "border-box",
+        }}
+      />
 
-      {/* Controls - show on selection OR hover */}
-      {(isSelected || isHovered) && (
-        <>
-          {/* Resize handles - only show when not editing */}
-          {!textElement.isEditing && (
-            <>
-              {/* Corner handles */}
-              {["nw", "ne", "sw", "se"].map((direction) => (
-                <div
-                  key={direction}
-                  className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
-                  style={{
-                    width: "12px",
-                    height: "12px",
-                    cursor: getCursorStyle(direction),
-                    top: direction.includes("n") ? "-6px" : undefined,
-                    bottom: direction.includes("s") ? "-6px" : undefined,
-                    left: direction.includes("w") ? "-6px" : undefined,
-                    right: direction.includes("e") ? "-6px" : undefined,
-                    pointerEvents: "auto",
-                    transition: "none",
-                    zIndex: 1001,
-                    opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
-                  }}
-                  data-direction={direction}
-                />
-              ))}
+      <div
+        ref={elementRef}
+        className={`absolute text-element select-none ${
+          isSelected ? "ring-2 ring-red-400 ring-opacity-60" : ""
+        } ${
+          isDragging
+            ? "cursor-grabbing"
+            : isSelected && !textElement.isEditing
+            ? "cursor-grab"
+            : "cursor-default"
+        }`}
+        style={{
+          left: scaledX,
+          top: scaledY,
+          width: scaledWidth,
+          height: scaledHeight,
+          fontSize: `${calculatedFontSize}px`,
+          fontFamily: textElement.fontFamily,
+          color: textElement.color,
+          backgroundColor:
+            textElement.backgroundColor !== "transparent"
+              ? textElement.backgroundColor
+              : "transparent",
+          fontWeight: textElement.isBold ? "bold" : "normal",
+          fontStyle: textElement.isItalic ? "italic" : "normal",
+          textDecoration: textElement.isUnderline ? "underline" : "none",
+          textAlign: textElement.alignment,
+          opacity: textElement.opacity || 1,
+          padding: "4px 6px",
+          borderRadius: "4px",
+          zIndex: isSelected ? 20 : 10,
+          minWidth: Math.max(60, calculatedFontSize * 3) + "px",
+          minHeight: Math.max(30, calculatedFontSize * 1.8) + "px",
+          boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
+          border: textElement.isEditing
+            ? "2px solid #3b82f6"
+            : isSelected
+            ? "1px solid #3b82f6"
+            : "1px solid rgba(0,0,0,0.1)",
+          pointerEvents: "auto",
+          transition: isDragging || isResizing ? "none" : "all 0.2s ease",
+          transform: "translateZ(0)",
+          willChange: isDragging || isResizing ? "transform" : "auto",
+        }}
+        onMouseDown={handleMouseDown}
+        onClick={handleClick}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {/* Text content */}
+        {textElement.isEditing ? (
+          <textarea
+            ref={textareaRef}
+            value={textElement.text}
+            onChange={handleTextareaChange}
+            onBlur={handleTextareaBlur}
+            onKeyDown={handleInputKeyDown}
+            onClick={handleTextareaClick}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="w-full h-full bg-transparent border-none outline-none resize-none overflow-hidden"
+            style={{
+              fontSize: "inherit",
+              fontFamily: "inherit",
+              color: "inherit",
+              fontWeight: "inherit",
+              fontStyle: "inherit",
+              textDecoration: "inherit",
+              textAlign: "inherit",
+              padding: 0,
+              margin: 0,
+              lineHeight: "1.4",
+              wordWrap: "break-word",
+              overflowWrap: "break-word",
+              whiteSpace: "pre-wrap",
+              boxSizing: "border-box",
+            }}
+            placeholder="Enter text..."
+            spellCheck={false}
+            autoComplete="off"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-start"
+            style={{
+              wordWrap: "break-word",
+              overflowWrap: "break-word",
+              lineHeight: "1.4",
+              whiteSpace: "pre-wrap",
+              pointerEvents: "auto",
+              alignItems:
+                textElement.alignment === "center"
+                  ? "center"
+                  : textElement.alignment === "right"
+                  ? "flex-end"
+                  : "flex-start",
+              overflow: "hidden",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                width: "100%",
+                textAlign: textElement.alignment,
+                wordWrap: "break-word",
+                overflowWrap: "break-word",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {textElement.text || "Click to edit"}
+            </div>
+          </div>
+        )}
 
-              {/* Side handles */}
-              {["n", "s", "e", "w"].map((direction) => (
-                <div
-                  key={direction}
-                  className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
-                  style={{
-                    width: "10px",
-                    height: "10px",
-                    cursor: getCursorStyle(direction),
-                    top:
-                      direction === "n"
-                        ? "-5px"
-                        : direction === "s"
-                        ? undefined
-                        : "50%",
-                    bottom: direction === "s" ? "-5px" : undefined,
-                    left:
-                      direction === "w"
-                        ? "-5px"
-                        : direction === "e"
-                        ? undefined
-                        : "50%",
-                    right: direction === "e" ? "-5px" : undefined,
-                    transform: ["n", "s"].includes(direction)
-                      ? "translateX(-50%)"
-                      : ["e", "w"].includes(direction)
-                      ? "translateY(-50%)"
-                      : undefined,
-                    pointerEvents: "auto",
-                    transition: "none",
-                    zIndex: 1001,
-                    opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
-                  }}
-                  data-direction={direction}
-                />
-              ))}
-            </>
-          )}
-        </>
-      )}
-    </div>
+        {/* Controls - show on selection OR hover */}
+        {(isSelected || isHovered) && (
+          <>
+            {/* Resize handles - only show when not editing */}
+            {!textElement.isEditing && (
+              <>
+                {/* Corner handles */}
+                {["nw", "ne", "sw", "se"].map((direction) => (
+                  <div
+                    key={direction}
+                    className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+                    style={{
+                      width: "12px",
+                      height: "12px",
+                      cursor: getCursorStyle(direction),
+                      top: direction.includes("n") ? "-6px" : undefined,
+                      bottom: direction.includes("s") ? "-6px" : undefined,
+                      left: direction.includes("w") ? "-6px" : undefined,
+                      right: direction.includes("e") ? "-6px" : undefined,
+                      pointerEvents: "auto",
+                      transition: "none",
+                      zIndex: 1001,
+                      opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
+                    }}
+                    data-direction={direction}
+                  />
+                ))}
+
+                {/* Side handles */}
+                {["n", "s", "e", "w"].map((direction) => (
+                  <div
+                    key={direction}
+                    className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+                    style={{
+                      width: "10px",
+                      height: "10px",
+                      cursor: getCursorStyle(direction),
+                      top:
+                        direction === "n"
+                          ? "-5px"
+                          : direction === "s"
+                          ? undefined
+                          : "50%",
+                      bottom: direction === "s" ? "-5px" : undefined,
+                      left:
+                        direction === "w"
+                          ? "-5px"
+                          : direction === "e"
+                          ? undefined
+                          : "50%",
+                      right: direction === "e" ? "-5px" : undefined,
+                      transform: ["n", "s"].includes(direction)
+                        ? "translateX(-50%)"
+                        : ["e", "w"].includes(direction)
+                        ? "translateY(-50%)"
+                        : undefined,
+                      pointerEvents: "auto",
+                      transition: "none",
+                      zIndex: 1001,
+                      opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
+                    }}
+                    data-direction={direction}
+                  />
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 };
 
@@ -580,6 +811,10 @@ const Allpagespreview = memo(
     onTextAdd = null,
     onTextUpdate = null,
     onTextDelete = null,
+    clearAllTextElements = false, // ✅ NEW PROP
+    onClearAllComplete = null, // ✅ NEW PROP
+    deleteSpecificElement = null, // NEW PROP
+    onDeleteSpecificComplete = null,
   }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [hasError, setHasError] = useState(false);
@@ -650,6 +885,33 @@ const Allpagespreview = memo(
       }),
       []
     );
+    useEffect(() => {
+      if (deleteSpecificElement) {
+        console.log(
+          "🗑️ Deleting specific text element:",
+          deleteSpecificElement
+        );
+
+        const { textId, pageNumber } = deleteSpecificElement;
+
+        // Remove from textElements state
+        setTextElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.filter((text) => text.id !== textId) || [],
+        }));
+
+        // Clear selection if this element was selected
+        if (selectedTextId === textId) {
+          setSelectedTextId(null);
+        }
+
+        // Notify parent that deletion is complete
+        if (onDeleteSpecificComplete) {
+          onDeleteSpecificComplete();
+        }
+      }
+    }, [deleteSpecificElement, selectedTextId, onDeleteSpecificComplete]);
 
     // Intersection observer for component visibility
     useEffect(() => {
@@ -945,7 +1207,48 @@ const Allpagespreview = memo(
       },
       [selectedTextId, onTextDelete]
     );
+    // Handle clear all text elements from parent
+    useEffect(() => {
+      if (clearAllTextElements) {
+        console.log("🗑️ Clearing all text elements from PDF preview");
 
+        // Clear all text elements
+        setTextElements({});
+        setSelectedTextId(null);
+
+        // Notify parent that clearing is complete
+        if (onClearAllComplete) {
+          onClearAllComplete();
+        }
+      }
+    }, [clearAllTextElements, onClearAllComplete]);
+
+    // 6. Optional: Visual feedback ke liye animation add kar sakte hain:
+
+    // Handle clear all with animation
+    useEffect(() => {
+      if (clearAllTextElements) {
+        console.log("🗑️ Clearing all text elements from PDF preview");
+
+        // Add fade out animation
+        const textElementNodes = document.querySelectorAll(".text-element");
+        textElementNodes.forEach((node) => {
+          node.style.transition = "opacity 0.3s ease-out";
+          node.style.opacity = "0";
+        });
+
+        // Clear after animation
+        setTimeout(() => {
+          setTextElements({});
+          setSelectedTextId(null);
+
+          // Notify parent that clearing is complete
+          if (onClearAllComplete) {
+            onClearAllComplete();
+          }
+        }, 300);
+      }
+    }, [clearAllTextElements, onClearAllComplete]);
     // Listen for text additions from parent
     useEffect(() => {
       if (textEditingState?.addTextToPage && currentPage) {
