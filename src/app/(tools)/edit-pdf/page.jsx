@@ -20,6 +20,10 @@ import {
   Type,
   Palette,
   Square,
+  FlipVertical,
+  FlipHorizontal,
+  RotateCw,
+  Edit,
 } from "lucide-react";
 
 import { pdfjs, Document, Page } from "react-pdf";
@@ -257,15 +261,33 @@ export default function PDFViewer() {
     addTextToPage: false, // ✅ NEW: Flag to trigger text addition
     onTextAdded: null, // ✅ NEW: Callback after text is added
   };
+
   const initialImageState = {
     showImageToolbar: false,
-    selectedImageFile: null,
+    opacity: 100, // Changed to 100 for better default
+    showOpacityDropdown: false,
+    images: [],
+    selectedImageId: null,
+    currentImageIndex: 0,
+    addImageToPage: false, // ✅ NEW: Flag to trigger image addition
+    onImageAdded: null, // ✅ NEW: Callback after image is added
+    deleteRequested: false,
+    rotation: 0,
+    flipHorizontal: false,
+    flipVertical: false,
   };
+
   const [textEditingState, setTextEditingState] = useState(initialTextState);
   const [imageEditingState, setImageEditingState] = useState(initialImageState);
   const [allTextElements, setAllTextElements] = useState([]);
   const [clearAllTextElements, setClearAllTextElements] = useState(false);
   const [deleteSpecificElement, setDeleteSpecificElement] = useState(null);
+  // 2. Add these new state variables after your existing states
+  const [allImageElements, setAllImageElements] = useState([]);
+  const [clearAllImageElements, setClearAllImageElements] = useState(false);
+  const [deleteSpecificImageElement, setDeleteSpecificImageElement] =
+    useState(null);
+
   const fonts = [
     "Arial",
     "Helvetica",
@@ -303,6 +325,8 @@ export default function PDFViewer() {
     "300%",
     "400%",
   ];
+
+  const opacityOptions = [25, 50, 75, 100];
   // Refs
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
@@ -791,7 +815,6 @@ export default function PDFViewer() {
       )
     );
   };
-
   const handleTextDelete = (textId, pageNumber) => {
     console.log("Text deleted:", textId, "from page", pageNumber);
     setAllTextElements((prev) => prev.filter((text) => text.id !== textId));
@@ -837,6 +860,10 @@ export default function PDFViewer() {
       ...prev,
       showTextToolbar: false,
     }));
+    setImageEditingState((prev) => ({
+      ...prev,
+      showImageToolbar: false,
+    }));
   };
 
   const options = [
@@ -852,16 +879,120 @@ export default function PDFViewer() {
   // For Text Exit
   // //////////////////////////////////////// //
 
+  // 3. Update your handleImageButtonClick function
   const handleImageButtonClick = () => {
     closeAllToolbars("image");
 
-    // Phir image wala open karo
+    // Create a file input element
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.style.display = "none";
+
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file && file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const imageSrc = event.target.result;
+
+          // Set state to show toolbar and add image
+          setImageEditingState((prev) => ({
+            ...prev,
+            showImageToolbar: true,
+            addImageToPage: true,
+            selectedImageSrc: imageSrc,
+            selectedImageFile: file,
+            onImageAdded: () => {
+              setImageEditingState((prev) => ({
+                ...prev,
+                addImageToPage: false,
+                onImageAdded: null,
+                selectedImageSrc: null,
+                selectedImageFile: null,
+              }));
+            },
+          }));
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Clean up
+      document.body.removeChild(input);
+    };
+
+    document.body.appendChild(input);
+    input.click();
+  };
+  // 4. Add image callback handlers (similar to text handlers)
+  const handleImageAdd = (imageElement) => {
+    console.log("Image added:", imageElement);
+    setAllImageElements((prev) => [...prev, imageElement]);
+  };
+
+  const handleImageUpdate = (updatedImageElement) => {
+    console.log("Image updated:", updatedImageElement);
+    setAllImageElements((prev) =>
+      prev.map((image) =>
+        image.id === updatedImageElement.id ? updatedImageElement : image
+      )
+    );
+  };
+
+  const handleImageDelete = (imageId, pageNumber) => {
+    console.log("Image deleted:", imageId, "from page", pageNumber);
+    setAllImageElements((prev) => prev.filter((image) => image.id !== imageId));
+
+    // Reset the delete request flag
     setImageEditingState((prev) => ({
       ...prev,
-      showImageToolbar: true,
+      deleteRequested: false,
     }));
   };
 
+  // 5. Add image toolbar event handlers
+  const handleImageOpacityChange = (opacity) => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      opacity: opacity,
+      showOpacityDropdown: false,
+    }));
+  };
+
+  const handleImageRotateLeft = () => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      rotation: (prev.rotation - 90 + 360) % 360,
+    }));
+  };
+
+  const handleImageRotateRight = () => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      rotation: (prev.rotation + 90) % 360,
+    }));
+  };
+
+  const handleImageFlipHorizontal = () => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      flipHorizontal: !prev.flipHorizontal,
+    }));
+  };
+
+  const handleImageFlipVertical = () => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      flipVertical: !prev.flipVertical,
+    }));
+  };
+
+  const handleImageDeleteSelected = () => {
+    setImageEditingState((prev) => ({
+      ...prev,
+      deleteRequested: true,
+    }));
+  };
   // Show upload screen if no files
   if (files.length === 0) {
     return (
@@ -936,7 +1067,7 @@ export default function PDFViewer() {
                 >
                   <path
                     fill="#707078"
-                    fill-rule="evenodd"
+                    fillRule="evenodd"
                     d="M12.213 19.44H7.37c-1.35 0-2.6-.677-3.263-1.774l-3.94-6.23c-.34-.462-.102-.795.115-.983s.74-.353 1.237-.324c.51.033.98.248 1.298.593l1.208 1.27c.093.097.246.134.384.09s.23-.155.23-.28l.007-8.732C4.65 2.474 5.162 2 5.793 2c.617 0 1.12.462 1.145 1.038l.001 6.78c0 .08.036.155.1.2s.153.087.244.086h.001c.09.001.18-.03.244-.085s.1-.13.102-.21V1.075C7.63.48 8.143 0 8.775 0H8.8c.63 0 1.155.476 1.155 1.072V9.8c0 .165.155.298.346.298s.346-.134.346-.298v-7.61c0-.596.503-1.08 1.134-1.08s1.138.484 1.138 1.08V9.8c0 .165.155.298.346.298s.346-.134.346-.298V5.325c0-.596.525-1.062 1.157-1.062h.033c.63 0 1.144.472 1.145 1.066l-.002 10.64c-.002 1.916-1.68 3.47-3.74 3.47z"
                   ></path>
                 </svg>
@@ -963,7 +1094,7 @@ export default function PDFViewer() {
                 <svg xmlns="http://www.w3.org/2000/svg" height="16" width="20">
                   <path
                     fill="#707078"
-                    fill-rule="evenodd"
+                    fillRule="evenodd"
                     d="M17.298 16c1.8 0 2.702-.923 2.702-2.732V2.723C20 .923 19.087 0 17.298 0H2.702C.913 0 0 .914 0 2.723v10.545C0 15.077.913 16 2.702 16h14.595zm-15.82-3.746v-9.43c0-.877.456-1.316 1.28-1.316h14.488c.814 0 1.28.44 1.28 1.316v9.393l-4.43-4.25c-.376-.338-.814-.52-1.27-.52a1.8 1.8 0 0 0-1.271.512l-3.82 3.49-1.566-1.444c-.358-.33-.752-.493-1.145-.493-.385 0-.743.155-1.092.484l-2.452 2.257zM8.403 6.05c0 1.133-.904 2.047-2.004 2.047-1.1 0-2.004-.914-2.004-2.047 0-1.124.895-2.056 2.004-2.056 1.1 0 2.004.932 2.004 2.056z"
                   ></path>
                 </svg>
@@ -974,7 +1105,7 @@ export default function PDFViewer() {
                   height="15.999"
                   width="15.999"
                   fill="#707078"
-                  fill-rule="evenodd"
+                  fillRule="evenodd"
                 >
                   <path d="M1.53 11.443l9.382-9.383 3.026 3.026-9.382 9.383-3.026-3.026zM0 16l3.344-.926-2.418-2.418L0 16zM14.776.47a1.61 1.61 0 0 0-2.272 0l-.68.68 3.026 3.026.68-.68a1.61 1.61 0 0 0 0-2.272L14.776.47z"></path>
                 </svg>
@@ -985,7 +1116,7 @@ export default function PDFViewer() {
                   width="24.001"
                   height="24"
                   fill="#707078"
-                  fill-rule="evenodd"
+                  fillRule="evenodd"
                 >
                   <path d="M13.716 10.286v4.286h5.534l.182.613c.188.63.284 1.29.284 1.96A6.86 6.86 0 0 1 12.858 24a6.86 6.86 0 0 1-6.857-6.857 6.86 6.86 0 0 1 6.857-6.857h.857zm-.857 4.418v-3.56a6 6 0 0 0 0 12 6 6 0 0 0 5.752-7.714h-5.026c-.4 0-.725-.325-.725-.725z"></path>
                   <path d="M.12 14.134L8.264.42a.86.86 0 0 1 1.474 0l3.857 6.497c.08.132.12.283.12.437v2.93c0 .474-.384.857-.857.857l-.23.004c-2.372.1-4.453 1.568-5.334 3.746-.13.324-.445.536-.794.536H.858a.86.86 0 0 1-.737-1.295zm12.737-6.78L9 .857.858 14.57H6.5a6.86 6.86 0 0 1 6.359-4.286v-2.93z"></path>
@@ -1191,8 +1322,106 @@ export default function PDFViewer() {
               </div>
             )}
             {imageEditingState.showImageToolbar && (
-              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200">
-                Hello
+              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
+                {/* Image Icon */}
+                <span className="text-lg px-2">🖼️</span>
+
+                {/* Opacity dropdown */}
+                <div className="relative">
+                  <button
+                    onClick={() =>
+                      setImageEditingState((prev) => ({
+                        ...prev,
+                        showOpacityDropdown: !prev.showOpacityDropdown,
+                      }))
+                    }
+                    className="flex items-center gap-1 px-3 py-2 hover:bg-gray-200 rounded text-sm font-medium"
+                    title="Opacity"
+                  >
+                    {imageEditingState.opacity}%
+                    <ChevronDown size={14} className="text-gray-500" />
+                  </button>
+
+                  {imageEditingState.showOpacityDropdown && (
+                    <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 min-w-[80px]">
+                      {[25, 50, 75, 100].map((option) => (
+                        <button
+                          key={option}
+                          onClick={() => handleImageOpacityChange(option)}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${
+                            imageEditingState.opacity === option
+                              ? "bg-blue-50 text-blue-600"
+                              : "text-gray-700"
+                          }`}
+                        >
+                          {option}%
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Separator */}
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+                {/* Rotate left */}
+                <button
+                  onClick={handleImageRotateLeft}
+                  className="p-2 hover:bg-gray-200 rounded"
+                  title="Rotate Left"
+                >
+                  <RotateCcw size={16} className="text-gray-700" />
+                </button>
+
+                {/* Rotate right */}
+                <button
+                  onClick={handleImageRotateRight}
+                  className="p-2 hover:bg-gray-200 rounded"
+                  title="Rotate Right"
+                >
+                  <RotateCw size={16} className="text-gray-700" />
+                </button>
+
+                {/* Separator */}
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+                {/* Flip horizontal */}
+                <button
+                  onClick={handleImageFlipHorizontal}
+                  className={`p-2 hover:bg-gray-200 rounded ${
+                    imageEditingState.flipHorizontal
+                      ? "bg-blue-100 text-blue-600"
+                      : ""
+                  }`}
+                  title="Flip Horizontal"
+                >
+                  <FlipHorizontal size={16} className="text-gray-700" />
+                </button>
+
+                {/* Flip vertical */}
+                <button
+                  onClick={handleImageFlipVertical}
+                  className={`p-2 hover:bg-gray-200 rounded ${
+                    imageEditingState.flipVertical
+                      ? "bg-blue-100 text-blue-600"
+                      : ""
+                  }`}
+                  title="Flip Vertical"
+                >
+                  <FlipVertical size={16} className="text-gray-700" />
+                </button>
+
+                {/* Separator */}
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+                {/* Delete */}
+                <button
+                  className="p-2 hover:bg-red-100 rounded text-red-600"
+                  title="Delete Image"
+                  onClick={handleImageDeleteSelected}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             )}
           </div>
@@ -1245,6 +1474,21 @@ export default function PDFViewer() {
                           onDeleteSpecificComplete={() =>
                             setDeleteSpecificElement(null)
                           }
+                          // Image editing props ✅ NEW
+                          imageEditingState={imageEditingState}
+                          onImageAdd={handleImageAdd}
+                          onImageUpdate={handleImageUpdate}
+                          onImageDelete={handleImageDelete}
+                          clearAllImageElements={clearAllImageElements}
+                          onClearAllImageComplete={() =>
+                            setClearAllImageElements(false)
+                          }
+                          deleteSpecificImageElement={
+                            deleteSpecificImageElement
+                          }
+                          onDeleteSpecificImageComplete={() =>
+                            setDeleteSpecificImageElement(null)
+                          }
                         />
                       </div>
                     </div>
@@ -1288,17 +1532,16 @@ export default function PDFViewer() {
             {/* Content Area */}
             <div className="flex-1 p-4">
               {/* Remove All Button */}
-              {allTextElements.length > 0 && (
+              {(allTextElements.length > 0 || allImageElements.length > 0) && (
                 <div className="flex justify-end mb-4">
                   <button
                     onClick={() => {
-                      // Clear all text elements from state
+                      // Clear all elements
                       setAllTextElements([]);
-
-                      // CRITICAL FIX: Clear text elements from child component
+                      setAllImageElements([]);
                       setClearAllTextElements(true);
-
-                      console.log("Removing all text elements");
+                      setClearAllImageElements(true);
+                      console.log("Removing all elements");
                     }}
                     className="text-red-500 hover:text-red-600 text-sm font-medium transition-colors"
                   >
@@ -1308,29 +1551,34 @@ export default function PDFViewer() {
               )}
 
               {/* Text Elements by Page */}
-              {allTextElements.length === 0 ? (
+              {allTextElements.length === 0 && allImageElements.length === 0 ? (
                 <div className="text-center bg-red-50 border-2 border-dashed border-red-200 p-8 rounded-lg text-red-600 mt-8 transition-colors hover:bg-red-100 hover:border-red-300">
                   <Type className="w-16 h-16 mx-auto mb-4 text-red-400" />
                   <h3 className="text-lg font-semibold text-red-700 mb-2">
-                    No text elements added
+                    No elements added
                   </h3>
                   <p className="text-red-500 mb-4">
-                    Get started by adding your first text element to the canvas
+                    Get started by adding text or images to your PDF
                   </p>
                 </div>
               ) : (
                 <div className="space-y-6">
                   {/* Group text elements by page */}
                   {Object.entries(
-                    allTextElements.reduce((acc, text) => {
-                      const page = text.pageNumber;
-                      if (!acc[page]) acc[page] = [];
-                      acc[page].push(text);
-                      return acc;
-                    }, {})
+                    [...allTextElements, ...allImageElements].reduce(
+                      (acc, element) => {
+                        const page = element.pageNumber;
+                        if (!acc[page]) acc[page] = { texts: [], images: [] };
+                        if (element.text !== undefined)
+                          acc[page].texts.push(element);
+                        else acc[page].images.push(element);
+                        return acc;
+                      },
+                      {}
+                    )
                   )
-                    .sort(([a], [b]) => parseInt(a) - parseInt(b)) // Sort pages numerically
-                    .map(([pageNumber, pageTexts]) => (
+                    .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                    .map(([pageNumber, pageElements]) => (
                       <div key={`page-${pageNumber}`}>
                         {/* Page Header */}
                         <div className="flex items-center justify-between mb-3 border-b border-gray-200 pb-2">
@@ -1338,96 +1586,146 @@ export default function PDFViewer() {
                             Page {pageNumber}
                           </h4>
                           <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                            {pageTexts.length} text
-                            {pageTexts.length !== 1 ? "s" : ""}
+                            {pageElements.texts.length +
+                              pageElements.images.length}{" "}
+                            element
+                            {pageElements.texts.length +
+                              pageElements.images.length !==
+                            1
+                              ? "s"
+                              : ""}
                           </span>
                         </div>
-                        {/* Text Elements for this page */}
-                        <div className="space-y-2">
-                          {pageTexts.map((textElement, index) => (
-                            <div
-                              key={textElement.id}
-                              className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors group"
-                            >
-                              {/* Text Icon and Content */}
-                              <div className="flex items-center gap-3 flex-1">
-                                {/* Text Icon */}
-                                <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600">
-                                  <Type className="w-4 h-4" />
-                                </div>
 
-                                {/* Text Content */}
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-gray-900">
-                                    {(() => {
-                                      const text =
-                                        textElement.text ||
-                                        `New Text ${index + 1}`;
-                                      return text.length > 20
-                                        ? text.substring(0, 20) + "..."
-                                        : text;
-                                    })()}
-                                  </p>
-                                  <div className="flex items-center gap-2 text-xs text-gray-500">
-                                    <span>{textElement.fontFamily}</span>
-                                    <span>•</span>
-                                    <span>{textElement.fontSize}px</span>
-                                    <span>•</span>
-                                    <div
-                                      className="w-3 h-3 rounded border border-gray-300"
-                                      style={{
-                                        backgroundColor: textElement.color,
-                                      }}
-                                    ></div>
-                                  </div>
+                        {/* Text Elements */}
+                        {pageElements.texts.map((textElement, index) => (
+                          <div
+                            key={textElement.id}
+                            className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors group mb-2"
+                          >
+                            <div className="flex items-center gap-3 flex-1">
+                              <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600">
+                                <Type className="w-4 h-4" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900">
+                                  {(() => {
+                                    const text =
+                                      textElement.text ||
+                                      `New Text ${index + 1}`;
+                                    return text.length > 20
+                                      ? text.substring(0, 20) + "..."
+                                      : text;
+                                  })()}
+                                </p>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                  <span>{textElement.fontFamily}</span>
+                                  <span>•</span>
+                                  <span>{textElement.fontSize}px</span>
                                 </div>
                               </div>
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() =>
+                                  handleThumbnailClick(parseInt(pageNumber))
+                                }
+                                className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                title="Edit text"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setAllTextElements((prev) =>
+                                    prev.filter((t) => t.id !== textElement.id)
+                                  );
+                                  setDeleteSpecificElement({
+                                    textId: textElement.id,
+                                    pageNumber: textElement.pageNumber,
+                                  });
+                                }}
+                                className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                title="Delete text"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
 
-                              {/* Action Buttons */}
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* Edit Button */}
-                                <button
-                                  onClick={() => {
-                                    // Scroll to the page and highlight the text element
-                                    handleThumbnailClick(parseInt(pageNumber));
-                                  }}
-                                  className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                  title="Edit text"
-                                >
+                        {/* Image Elements */}
+                        {pageElements.images.map((imageElement, index) => (
+                          <div
+                            key={imageElement.id}
+                            className="flex items-center justify-between p-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors group mb-2"
+                          >
+                            <div className="flex items-center gap-3 flex-1">
+                              <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
+                                {imageElement.src ? (
+                                  <img
+                                    src={imageElement.src}
+                                    alt="Preview"
+                                    className="w-full h-full object-cover rounded"
+                                  />
+                                ) : (
                                   <svg
                                     className="w-4 h-4"
                                     fill="currentColor"
                                     viewBox="0 0 20 20"
                                   >
-                                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"
+                                      clipRule="evenodd"
+                                    />
                                   </svg>
-                                </button>
-
-                                {/* Delete Button */}
-                                <button
-                                  onClick={() => {
-                                    // Remove from parent state
-                                    setAllTextElements((prev) =>
-                                      prev.filter(
-                                        (t) => t.id !== textElement.id
-                                      )
-                                    );
-
-                                    // Signal child component to delete specific element
-                                    setDeleteSpecificElement({
-                                      textId: textElement.id,
-                                      pageNumber: textElement.pageNumber,
-                                    });
-                                  }}
-                                  className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                  title="Delete text"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900">
+                                  Image {index + 1}
+                                </p>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                  <span>
+                                    {Math.round(imageElement.width)}×
+                                    {Math.round(imageElement.height)}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{imageElement.opacity}% opacity</span>
+                                </div>
                               </div>
                             </div>
-                          ))}
-                        </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() =>
+                                  handleThumbnailClick(parseInt(pageNumber))
+                                }
+                                className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                title="Edit image"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setAllImageElements((prev) =>
+                                    prev.filter(
+                                      (img) => img.id !== imageElement.id
+                                    )
+                                  );
+                                  setDeleteSpecificImageElement({
+                                    imageId: imageElement.id,
+                                    pageNumber: imageElement.pageNumber,
+                                  });
+                                }}
+                                className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                title="Delete image"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ))}
                 </div>

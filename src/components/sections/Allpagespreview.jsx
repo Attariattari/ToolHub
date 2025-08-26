@@ -792,7 +792,480 @@ const ResizableTextElement = ({
     </>
   );
 };
+const ResizableImageElement = ({
+  imageElement,
+  isSelected,
+  onSelect,
+  onUpdate,
+  onDelete,
+  zoom = 100,
+}) => {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [resizeStart, setResizeStart] = useState({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    elementX: 0,
+    elementY: 0,
+  });
+  const [currentResizeHandle, setCurrentResizeHandle] = useState(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [clickCount, setClickCount] = useState(0);
+  const elementRef = useRef(null);
+  const imageRef = useRef(null);
+  const clickTimeoutRef = useRef(null);
 
+  // Calculate scaled dimensions from base coordinates
+  const scaledWidth = (imageElement.width * zoom) / 100;
+  const scaledHeight = (imageElement.height * zoom) / 100;
+  const scaledX = (imageElement.x * zoom) / 100;
+  const scaledY = (imageElement.y * zoom) / 100;
+
+  // Function to get PDF page boundaries
+  const getPageBoundaries = useCallback(() => {
+    const pageElement = elementRef.current?.closest("[data-page-number]");
+    if (!pageElement) return null;
+
+    const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
+    if (!pdfPageElement) return null;
+
+    const pageRect = pdfPageElement.getBoundingClientRect();
+    return {
+      width: pageRect.width,
+      height: pageRect.height,
+      element: pdfPageElement,
+    };
+  }, []);
+
+  const handleMouseDown = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    // Handle resize handles
+    if (e.target.classList.contains("resize-handle")) {
+      setIsResizing(true);
+      setCurrentResizeHandle(e.target.dataset.direction);
+
+      const rect = elementRef.current.getBoundingClientRect();
+      setResizeStart({
+        x: e.clientX,
+        y: e.clientY,
+        width: imageElement.width,
+        height: imageElement.height,
+        elementX: imageElement.x,
+        elementY: imageElement.y,
+      });
+      return;
+    }
+
+    // Handle delete button
+    if (e.target.classList.contains("delete-btn")) {
+      return;
+    }
+
+    // Select this element if not selected
+    if (!isSelected) {
+      onSelect(imageElement.id);
+      return;
+    }
+
+    // Start dragging if already selected
+    setIsDragging(true);
+    const rect = elementRef.current.getBoundingClientRect();
+    setDragStart({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+
+  const handleMouseMove = useCallback(
+    (e) => {
+      if (isDragging) {
+        const pageBounds = getPageBoundaries();
+        if (!pageBounds) return;
+
+        const pageRect = pageBounds.element.getBoundingClientRect();
+
+        // Calculate new position in current zoom scale
+        const newScaledX = Math.max(
+          0,
+          Math.min(
+            pageBounds.width - scaledWidth,
+            e.clientX - pageRect.left - dragStart.x
+          )
+        );
+        const newScaledY = Math.max(
+          0,
+          Math.min(
+            pageBounds.height - scaledHeight,
+            e.clientY - pageRect.top - dragStart.y
+          )
+        );
+
+        // Convert back to base coordinates (zoom-independent)
+        const newX = (newScaledX * 100) / zoom;
+        const newY = (newScaledY * 100) / zoom;
+
+        onUpdate({ x: newX, y: newY });
+      } else if (isResizing && currentResizeHandle) {
+        const pageBounds = getPageBoundaries();
+        if (!pageBounds) return;
+
+        // Calculate delta in screen coordinates
+        const deltaX = e.clientX - resizeStart.x;
+        const deltaY = e.clientY - resizeStart.y;
+
+        // Convert delta to base coordinates (zoom-independent)
+        const baseDeltaX = (deltaX * 100) / zoom;
+        const baseDeltaY = (deltaY * 100) / zoom;
+
+        // Work with base coordinates for consistency
+        let newWidth = resizeStart.width;
+        let newHeight = resizeStart.height;
+        let newX = resizeStart.elementX;
+        let newY = resizeStart.elementY;
+
+        // Calculate minimum sizes in base coordinates
+        const minWidth = 50;
+        const minHeight = 50;
+
+        // Maintain aspect ratio by default
+        const aspectRatio = imageElement.width / imageElement.height;
+
+        // Apply resize based on handle direction
+        switch (currentResizeHandle) {
+          case "se": // Southeast - increase width and height
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            break;
+          case "sw": // Southwest - decrease width, increase height, move left
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
+            break;
+          case "ne": // Northeast - increase width, decrease height, move up
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
+            break;
+          case "nw": // Northwest - decrease both, move both
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
+            break;
+          case "n": // North - maintain aspect ratio, resize from top
+            newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
+            newWidth = newHeight * aspectRatio;
+            newY = resizeStart.elementY + (resizeStart.height - newHeight);
+            break;
+          case "s": // South - maintain aspect ratio, resize from bottom
+            newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
+            newWidth = newHeight * aspectRatio;
+            break;
+          case "e": // East - maintain aspect ratio, resize from right
+            newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            break;
+          case "w": // West - maintain aspect ratio, resize from left
+            newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
+            newHeight = newWidth / aspectRatio;
+            newX = resizeStart.elementX + (resizeStart.width - newWidth);
+            break;
+        }
+
+        // Apply boundary constraints in base coordinates
+        const pageBaseWidth = (pageBounds.width * 100) / zoom;
+        const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+        // Ensure element stays within page boundaries
+        if (newX < 0) {
+          newWidth = newWidth + newX;
+          newHeight = newWidth / aspectRatio;
+          newX = 0;
+        }
+
+        if (newY < 0) {
+          newHeight = newHeight + newY;
+          newWidth = newHeight * aspectRatio;
+          newY = 0;
+        }
+
+        // Limit to page boundaries
+        if (newX + newWidth > pageBaseWidth) {
+          newWidth = pageBaseWidth - newX;
+          newHeight = newWidth / aspectRatio;
+        }
+
+        if (newY + newHeight > pageBaseHeight) {
+          newHeight = pageBaseHeight - newY;
+          newWidth = newHeight * aspectRatio;
+        }
+
+        // Ensure minimum dimensions are maintained
+        newWidth = Math.max(minWidth, newWidth);
+        newHeight = Math.max(minHeight, newHeight);
+
+        // Final position adjustment to stay within bounds
+        newX = Math.max(0, Math.min(pageBaseWidth - newWidth, newX));
+        newY = Math.max(0, Math.min(pageBaseHeight - newHeight, newY));
+
+        // Update with base coordinates
+        const newUpdate = {
+          width: newWidth,
+          height: newHeight,
+          x: newX,
+          y: newY,
+        };
+
+        onUpdate(newUpdate);
+      }
+    },
+    [
+      isDragging,
+      isResizing,
+      dragStart,
+      resizeStart,
+      currentResizeHandle,
+      onUpdate,
+      getPageBoundaries,
+      scaledWidth,
+      scaledHeight,
+      zoom,
+      imageElement.width,
+      imageElement.height,
+    ]
+  );
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setIsResizing(false);
+    setCurrentResizeHandle(null);
+  }, []);
+
+  // Throttled mouse move for better performance
+  const throttledMouseMove = useCallback(
+    (e) => {
+      requestAnimationFrame(() => {
+        handleMouseMove(e);
+      });
+    },
+    [handleMouseMove]
+  );
+
+  useEffect(() => {
+    if (isDragging || isResizing) {
+      document.addEventListener("mousemove", throttledMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      return () => {
+        document.removeEventListener("mousemove", throttledMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      };
+    }
+  }, [isDragging, isResizing, throttledMouseMove, handleMouseUp]);
+
+  const getCursorStyle = (direction) => {
+    const cursorMap = {
+      nw: "nw-resize",
+      ne: "ne-resize",
+      sw: "sw-resize",
+      se: "se-resize",
+      n: "n-resize",
+      s: "s-resize",
+      e: "e-resize",
+      w: "w-resize",
+    };
+    return cursorMap[direction] || "default";
+  };
+
+  // Handle single and double click logic
+  const handleClick = (e) => {
+    e.stopPropagation();
+
+    // If not selected, select it (first click)
+    if (!isSelected) {
+      onSelect(imageElement.id);
+      setClickCount(1);
+      return;
+    }
+  };
+
+  const handleMouseEnter = () => {
+    setIsHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
+  };
+
+  const handleDeleteClick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onDelete();
+  };
+
+  const handleImageLoad = () => {
+    setImageLoaded(true);
+  };
+
+  const handleImageError = () => {
+    console.error("Failed to load image:", imageElement.src);
+  };
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Calculate transform styles for rotation and flipping
+  const getTransformStyle = () => {
+    let transform = "";
+
+    if (imageElement.rotation) {
+      transform += `rotate(${imageElement.rotation}deg) `;
+    }
+
+    if (imageElement.flipHorizontal || imageElement.flipVertical) {
+      const scaleX = imageElement.flipHorizontal ? -1 : 1;
+      const scaleY = imageElement.flipVertical ? -1 : 1;
+      transform += `scale(${scaleX}, ${scaleY}) `;
+    }
+
+    return transform.trim();
+  };
+
+  return (
+    <div
+      ref={elementRef}
+      className={`absolute image-element select-none ${
+        isSelected ? "ring-2 ring-blue-400 ring-opacity-60" : ""
+      } ${
+        isDragging
+          ? "cursor-grabbing"
+          : isSelected
+          ? "cursor-grab"
+          : "cursor-default"
+      }`}
+      style={{
+        left: scaledX,
+        top: scaledY,
+        width: scaledWidth,
+        height: scaledHeight,
+        opacity: (imageElement.opacity || 100) / 100,
+        zIndex: isSelected ? 20 : 10,
+        minWidth: "30px",
+        minHeight: "30px",
+        boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
+        border: isSelected ? "2px solid #3b82f6" : "1px solid rgba(0,0,0,0.1)",
+        pointerEvents: "auto",
+        transition: isDragging || isResizing ? "none" : "all 0.2s ease",
+        transform: "translateZ(0)",
+        willChange: isDragging || isResizing ? "transform" : "auto",
+        borderRadius: "4px",
+        overflow: "hidden",
+      }}
+      onMouseDown={handleMouseDown}
+      onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {/* Image content */}
+      <img
+        ref={imageRef}
+        src={imageElement.src}
+        alt="PDF Image"
+        className="w-full h-full object-contain"
+        style={{
+          transform: getTransformStyle(),
+          transformOrigin: "center center",
+          transition: isDragging || isResizing ? "none" : "transform 0.2s ease",
+        }}
+        onLoad={handleImageLoad}
+        onError={handleImageError}
+        draggable={false}
+      />
+
+      {/* Loading overlay */}
+      {!imageLoaded && (
+        <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
+          <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Controls - show on selection OR hover */}
+      {(isSelected || isHovered) && (
+        <>
+          {/* Resize handles */}
+          {["nw", "ne", "sw", "se"].map((direction) => (
+            <div
+              key={direction}
+              className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+              style={{
+                width: "12px",
+                height: "12px",
+                cursor: getCursorStyle(direction),
+                top: direction.includes("n") ? "-6px" : undefined,
+                bottom: direction.includes("s") ? "-6px" : undefined,
+                left: direction.includes("w") ? "-6px" : undefined,
+                right: direction.includes("e") ? "-6px" : undefined,
+                pointerEvents: "auto",
+                transition: "none",
+                zIndex: 1001,
+                opacity: isSelected ? 1 : 0.8,
+              }}
+              data-direction={direction}
+            />
+          ))}
+
+          {/* Side handles */}
+          {["n", "s", "e", "w"].map((direction) => (
+            <div
+              key={direction}
+              className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+              style={{
+                width: "10px",
+                height: "10px",
+                cursor: getCursorStyle(direction),
+                top:
+                  direction === "n"
+                    ? "-5px"
+                    : direction === "s"
+                    ? undefined
+                    : "50%",
+                bottom: direction === "s" ? "-5px" : undefined,
+                left:
+                  direction === "w"
+                    ? "-5px"
+                    : direction === "e"
+                    ? undefined
+                    : "50%",
+                right: direction === "e" ? "-5px" : undefined,
+                transform: ["n", "s"].includes(direction)
+                  ? "translateX(-50%)"
+                  : ["e", "w"].includes(direction)
+                  ? "translateY(-50%)"
+                  : undefined,
+                pointerEvents: "auto",
+                transition: "none",
+                zIndex: 1001,
+                opacity: isSelected ? 1 : 0.8,
+              }}
+              data-direction={direction}
+            />
+          ))}
+        </>
+      )}
+    </div>
+  );
+};
 const Allpagespreview = memo(
   ({
     file,
@@ -811,10 +1284,19 @@ const Allpagespreview = memo(
     onTextAdd = null,
     onTextUpdate = null,
     onTextDelete = null,
-    clearAllTextElements = false, // ✅ NEW PROP
-    onClearAllComplete = null, // ✅ NEW PROP
-    deleteSpecificElement = null, // NEW PROP
+    clearAllTextElements = false,
+    onClearAllComplete = null,
+    deleteSpecificElement = null,
     onDeleteSpecificComplete = null,
+    // Image editing props
+    imageEditingState = null,
+    onImageAdd = null,
+    onImageUpdate = null,
+    onImageDelete = null,
+    clearAllImageElements = null,
+    onClearAllImageComplete = null,
+    deleteSpecificImageElement = null,
+    onDeleteSpecificImageComplete = null,
   }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [hasError, setHasError] = useState(false);
@@ -831,6 +1313,8 @@ const Allpagespreview = memo(
     const isUserScrollingRef = useRef(false);
     const scrollTimeoutRef = useRef(null);
     const lastUserClickedPageRef = useRef(null);
+    const [imageElements, setImageElements] = useState({});
+    const [selectedImageId, setSelectedImageId] = useState(null);
 
     // Calculate PDF width based on layout
     const actualPDFWidth = useMemo(() => {
@@ -885,6 +1369,8 @@ const Allpagespreview = memo(
       }),
       []
     );
+
+    // Handle delete specific text element
     useEffect(() => {
       if (deleteSpecificElement) {
         console.log(
@@ -974,7 +1460,7 @@ const Allpagespreview = memo(
       }
     }, [currentPage, documentLoaded, layoutType]);
 
-    // FIXED: Page visibility tracking with dynamic threshold based on zoom
+    // Page visibility tracking with dynamic threshold based on zoom
     useEffect(() => {
       if (
         (layoutType !== "continuous" && layoutType !== "spread") ||
@@ -985,18 +1471,18 @@ const Allpagespreview = memo(
 
       // Dynamic threshold based on zoom level
       const getThresholdForZoom = (zoom) => {
-        if (zoom <= 50) return [0.1, 0.3, 0.6]; // Lower zoom = easier detection
+        if (zoom <= 50) return [0.1, 0.3, 0.6];
         if (zoom <= 75) return [0.15, 0.4, 0.7];
         if (zoom <= 100) return [0.2, 0.5, 0.8];
-        return [0.25, 0.5, 0.9]; // Higher zoom = need more visibility
+        return [0.25, 0.5, 0.9];
       };
 
       // Dynamic root margin based on zoom level
       const getRootMarginForZoom = (zoom) => {
-        if (zoom <= 50) return "-5% 0px -5% 0px"; // More lenient for low zoom
+        if (zoom <= 50) return "-5% 0px -5% 0px";
         if (zoom <= 75) return "-8% 0px -8% 0px";
         if (zoom <= 100) return "-10% 0px -10% 0px";
-        return "-15% 0px -15% 0px"; // Stricter for high zoom
+        return "-15% 0px -15% 0px";
       };
 
       const pageObserver = new IntersectionObserver(
@@ -1014,7 +1500,6 @@ const Allpagespreview = memo(
               entry.target.getAttribute("data-page-number")
             );
 
-            // More flexible visibility detection
             const minThreshold = userZoom <= 75 ? 0.3 : 0.5;
 
             if (
@@ -1023,7 +1508,6 @@ const Allpagespreview = memo(
             ) {
               currentlyVisible.add(pageNum);
 
-              // Track the page with best visibility
               if (entry.intersectionRatio > bestVisibilityRatio) {
                 bestVisibilityRatio = entry.intersectionRatio;
                 bestVisiblePage = pageNum;
@@ -1034,7 +1518,6 @@ const Allpagespreview = memo(
           if (currentlyVisible.size > 0 && bestVisiblePage) {
             setVisiblePages(currentlyVisible);
 
-            // Only change page if the best visible page is different from current
             if (bestVisiblePage !== currentPage) {
               onPageChange(bestVisiblePage);
             }
@@ -1046,7 +1529,6 @@ const Allpagespreview = memo(
         }
       );
 
-      // Re-observe all pages when zoom changes
       Object.values(pageRefs.current).forEach((pageElement) => {
         if (pageElement) {
           pageObserver.observe(pageElement);
@@ -1059,16 +1541,14 @@ const Allpagespreview = memo(
           clearTimeout(scrollTimeoutRef.current);
         }
       };
-    }, [documentLoaded, layoutType, onPageChange, currentPage, userZoom]); // Added userZoom dependency
+    }, [documentLoaded, layoutType, onPageChange, currentPage, userZoom]);
 
     // Monitor zoom changes and trigger re-render
     useEffect(() => {
       if (userZoom !== currentZoom) {
         setCurrentZoom(userZoom);
-        // Force immediate update of all text elements for smooth zoom transition
         setTextElements((prevElements) => {
           const updatedElements = { ...prevElements };
-          // This triggers re-render with new zoom values
           Object.keys(updatedElements).forEach((pageNum) => {
             updatedElements[pageNum] = [...updatedElements[pageNum]];
           });
@@ -1080,18 +1560,15 @@ const Allpagespreview = memo(
     // Additional effect to handle real-time zoom updates for selected text
     useEffect(() => {
       if (selectedTextId && userZoom !== currentZoom) {
-        // Find and update selected text element if needed
         const pageNumber = Object.keys(textElements).find((page) =>
           textElements[page]?.some((text) => text.id === selectedTextId)
         );
 
         if (pageNumber) {
-          // This will trigger a re-render of the selected element
           const element = textElements[pageNumber]?.find(
             (t) => t.id === selectedTextId
           );
           if (element) {
-            // Trigger a small update to force re-render without changing actual values
             setTextElements((prev) => ({ ...prev }));
           }
         }
@@ -1139,9 +1616,6 @@ const Allpagespreview = memo(
       }));
     }, []);
 
-    // REMOVED: handlePageClick function completely
-    // PDF pages will no longer create text on click
-
     const handleTextChange = useCallback(
       (textId, pageNumber, newText) => {
         setTextElements((prev) => ({
@@ -1152,7 +1626,6 @@ const Allpagespreview = memo(
             ) || [],
         }));
 
-        // Call parent callback
         if (onTextUpdate) {
           const updatedText = textElements[pageNumber]?.find(
             (t) => t.id === textId
@@ -1175,7 +1648,6 @@ const Allpagespreview = memo(
             ) || [],
         }));
 
-        // Call parent callback
         if (onTextUpdate) {
           const updatedText = textElements[pageNumber]?.find(
             (t) => t.id === textId
@@ -1186,6 +1658,28 @@ const Allpagespreview = memo(
         }
       },
       [textElements, onTextUpdate]
+    );
+
+    const handleImageStyleUpdate = useCallback(
+      (imageId, pageNumber, styleUpdates) => {
+        setImageElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.map((image) =>
+              image.id === imageId ? { ...image, ...styleUpdates } : image
+            ) || [],
+        }));
+
+        if (onImageUpdate) {
+          const updatedImage = imageElements[pageNumber]?.find(
+            (img) => img.id === imageId
+          );
+          if (updatedImage) {
+            onImageUpdate({ ...updatedImage, ...styleUpdates });
+          }
+        }
+      },
+      [imageElements, onImageUpdate]
     );
 
     const handleTextDelete = useCallback(
@@ -1200,55 +1694,54 @@ const Allpagespreview = memo(
           setSelectedTextId(null);
         }
 
-        // Call parent callback
         if (onTextDelete) {
           onTextDelete(textId, pageNumber);
         }
       },
       [selectedTextId, onTextDelete]
     );
+
+    const handleImageDelete = useCallback(
+      (imageId, pageNumber) => {
+        setImageElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.filter((image) => image.id !== imageId) || [],
+        }));
+
+        if (selectedImageId === imageId) {
+          setSelectedImageId(null);
+        }
+
+        if (onImageDelete) {
+          onImageDelete(imageId, pageNumber);
+        }
+      },
+      [selectedImageId, onImageDelete]
+    );
+
     // Handle clear all text elements from parent
     useEffect(() => {
       if (clearAllTextElements) {
         console.log("🗑️ Clearing all text elements from PDF preview");
 
-        // Clear all text elements
-        setTextElements({});
-        setSelectedTextId(null);
-
-        // Notify parent that clearing is complete
-        if (onClearAllComplete) {
-          onClearAllComplete();
-        }
-      }
-    }, [clearAllTextElements, onClearAllComplete]);
-
-    // 6. Optional: Visual feedback ke liye animation add kar sakte hain:
-
-    // Handle clear all with animation
-    useEffect(() => {
-      if (clearAllTextElements) {
-        console.log("🗑️ Clearing all text elements from PDF preview");
-
-        // Add fade out animation
         const textElementNodes = document.querySelectorAll(".text-element");
         textElementNodes.forEach((node) => {
           node.style.transition = "opacity 0.3s ease-out";
           node.style.opacity = "0";
         });
 
-        // Clear after animation
         setTimeout(() => {
           setTextElements({});
           setSelectedTextId(null);
 
-          // Notify parent that clearing is complete
           if (onClearAllComplete) {
             onClearAllComplete();
           }
         }, 300);
       }
     }, [clearAllTextElements, onClearAllComplete]);
+
     // Listen for text additions from parent
     useEffect(() => {
       if (textEditingState?.addTextToPage && currentPage) {
@@ -1260,8 +1753,8 @@ const Allpagespreview = memo(
         const newTextElement = {
           id: textId,
           pageNumber,
-          x: 100, // Default position
-          y: 100, // Default position
+          x: 100,
+          y: 100,
           width: 120,
           height: 30,
           text: "New Text",
@@ -1288,7 +1781,6 @@ const Allpagespreview = memo(
           onTextAdd(newTextElement);
         }
 
-        // Reset the flag in parent
         if (textEditingState.onTextAdded) {
           textEditingState.onTextAdded();
         }
@@ -1300,6 +1792,7 @@ const Allpagespreview = memo(
       onTextAdd,
     ]);
 
+    // Update selected text styles from toolbar
     useEffect(() => {
       if (selectedTextId && textEditingState) {
         const pageNumber = Object.keys(textElements).find((page) =>
@@ -1307,12 +1800,10 @@ const Allpagespreview = memo(
         );
 
         if (pageNumber) {
-          // CRITICAL FIX: Get current text element first
           const currentElement = textElements[pageNumber]?.find(
             (text) => text.id === selectedTextId
           );
 
-          // Only update if there's actually a change to prevent unnecessary re-renders
           if (currentElement) {
             const hasChanges =
               currentElement.fontSize !== textEditingState.selectedSize ||
@@ -1327,7 +1818,6 @@ const Allpagespreview = memo(
               currentElement.opacity !== textEditingState.opacity;
 
             if (hasChanges) {
-              // CRITICAL FIX: Don't change position when updating font size
               const updatedStyle = {
                 fontSize: textEditingState.selectedSize,
                 fontFamily: textEditingState.selectedFont,
@@ -1338,7 +1828,6 @@ const Allpagespreview = memo(
                 isUnderline: textEditingState.isUnderline,
                 alignment: textEditingState.selectedAlignment,
                 opacity: textEditingState.opacity,
-                // KEEP existing position and dimensions to prevent jumps
                 x: currentElement.x,
                 y: currentElement.y,
                 width: currentElement.width,
@@ -1356,6 +1845,7 @@ const Allpagespreview = memo(
       }
     }, [textEditingState, selectedTextId, textElements, handleTextStyleUpdate]);
 
+    // Handle font size changes with smooth transitions
     useEffect(() => {
       if (selectedTextId && textEditingState?.selectedSize) {
         const pageNumber = Object.keys(textElements).find((page) =>
@@ -1371,25 +1861,22 @@ const Allpagespreview = memo(
             currentElement &&
             currentElement.fontSize !== textEditingState.selectedSize
           ) {
-            // Add a small delay for smoother font size transitions
             const timeoutId = setTimeout(() => {
-              // Auto-adjust height based on font size if needed
               const fontSizeRatio =
                 textEditingState.selectedSize / currentElement.fontSize;
               const newHeight = Math.max(
                 currentElement.height * fontSizeRatio,
-                textEditingState.selectedSize * 1.5 // Minimum height based on font size
+                textEditingState.selectedSize * 1.5
               );
 
               handleTextStyleUpdate(selectedTextId, parseInt(pageNumber), {
                 fontSize: textEditingState.selectedSize,
-                height: newHeight, // Auto-adjust height
-                // Keep position the same
+                height: newHeight,
                 x: currentElement.x,
                 y: currentElement.y,
                 width: currentElement.width,
               });
-            }, 50); // 50ms delay for smooth transition
+            }, 50);
 
             return () => clearTimeout(timeoutId);
           }
@@ -1420,10 +1907,23 @@ const Allpagespreview = memo(
       handleTextDelete,
     ]);
 
+    // FIXED: Click outside handler for both text and image elements
     useEffect(() => {
       const handleClickOutside = (e) => {
-        // Don't do anything if clicking on text elements or their controls
-        if (e.target.closest(".text-element")) return;
+        // Don't do anything if clicking on text or image elements or their controls
+        if (
+          e.target.closest(".text-element") ||
+          e.target.closest(".image-element")
+        )
+          return;
+
+        // If image tool is active, only deselect when clicking outside PDF pages
+        if (imageEditingState?.showImageToolbar) {
+          if (!e.target.closest("[data-page-number]")) {
+            setSelectedImageId(null);
+          }
+          return;
+        }
 
         // If text tool is active, only deselect when clicking outside PDF pages
         if (textEditingState?.showTextToolbar) {
@@ -1433,16 +1933,20 @@ const Allpagespreview = memo(
           return;
         }
 
-        // Normal behavior when text tool is not active
+        // Normal behavior when no tool is active
         if (!e.target.closest("[data-page-number]")) {
           setSelectedTextId(null);
+          setSelectedImageId(null);
         }
       };
 
-      document.addEventListener("mousedown", handleClickOutside, true); // Use capture
+      document.addEventListener("mousedown", handleClickOutside, true);
       return () =>
         document.removeEventListener("mousedown", handleClickOutside, true);
-    }, [textEditingState?.showTextToolbar]);
+    }, [
+      textEditingState?.showTextToolbar,
+      imageEditingState?.showImageToolbar,
+    ]);
 
     // Text overlay component
     const renderTextOverlay = useCallback(
@@ -1454,7 +1958,7 @@ const Allpagespreview = memo(
           <div
             className="absolute inset-0"
             style={{
-              pointerEvents: "none", // Container doesn't block events
+              pointerEvents: "none",
             }}
           >
             {pageTexts.map((textElement) => (
@@ -1471,7 +1975,7 @@ const Allpagespreview = memo(
                   handleTextChange(textElement.id, pageNumber, newText)
                 }
                 pageScale={pageScale}
-                zoom={userZoom} // CRITICAL: Pass userZoom directly instead of currentZoom
+                zoom={userZoom}
               />
             ))}
           </div>
@@ -1481,14 +1985,213 @@ const Allpagespreview = memo(
         textElements,
         selectedTextId,
         pageScale,
-        userZoom, // CRITICAL: Add userZoom to dependencies
+        userZoom,
         handleTextStyleUpdate,
         handleTextDelete,
         handleTextChange,
       ]
     );
 
-    // Function to render pages based on layout type
+    // FIXED: Image overlay component
+    const renderImageOverlay = useCallback(
+      (pageNumber) => {
+        const pageImages = imageElements[pageNumber] || [];
+        if (pageImages.length === 0) return null;
+
+        return (
+          <div
+            className="absolute inset-0"
+            style={{
+              pointerEvents: "none",
+            }}
+          >
+            {pageImages.map((imageElement) => (
+              <ResizableImageElement
+                key={imageElement.id}
+                imageElement={imageElement}
+                isSelected={selectedImageId === imageElement.id}
+                onSelect={setSelectedImageId}
+                onUpdate={(updates) =>
+                  handleImageStyleUpdate(imageElement.id, pageNumber, updates)
+                }
+                onDelete={() => handleImageDelete(imageElement.id, pageNumber)}
+                pageScale={pageScale}
+                zoom={userZoom}
+              />
+            ))}
+          </div>
+        );
+      },
+      [
+        imageElements,
+        selectedImageId,
+        pageScale,
+        userZoom,
+        handleImageStyleUpdate,
+        handleImageDelete,
+      ]
+    );
+
+    // Listen for image additions from parent
+    useEffect(() => {
+      if (
+        imageEditingState?.addImageToPage &&
+        currentPage &&
+        imageEditingState?.selectedImageSrc
+      ) {
+        const pageNumber = currentPage;
+        const imageId = `image_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+
+        const newImageElement = {
+          id: imageId,
+          pageNumber,
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 150,
+          src: imageEditingState.selectedImageSrc,
+          opacity: imageEditingState?.opacity || 100,
+          rotation: imageEditingState?.rotation || 0,
+          flipHorizontal: imageEditingState?.flipHorizontal || false,
+          flipVertical: imageEditingState?.flipVertical || false,
+        };
+
+        setImageElements((prev) => ({
+          ...prev,
+          [pageNumber]: [...(prev[pageNumber] || []), newImageElement],
+        }));
+
+        setSelectedImageId(imageId);
+
+        if (onImageAdd) {
+          onImageAdd(newImageElement);
+        }
+
+        if (imageEditingState.onImageAdded) {
+          imageEditingState.onImageAdded();
+        }
+      }
+    }, [
+      imageEditingState?.addImageToPage,
+      currentPage,
+      imageEditingState?.selectedImageSrc,
+      imageEditingState,
+      onImageAdd,
+    ]);
+
+    // Update selected image styles from toolbar
+    useEffect(() => {
+      if (selectedImageId && imageEditingState) {
+        const pageNumber = Object.keys(imageElements).find((page) =>
+          imageElements[page]?.some((image) => image.id === selectedImageId)
+        );
+
+        if (pageNumber) {
+          const currentElement = imageElements[pageNumber]?.find(
+            (image) => image.id === selectedImageId
+          );
+
+          if (currentElement) {
+            const hasChanges =
+              currentElement.opacity !== imageEditingState.opacity ||
+              currentElement.rotation !== imageEditingState.rotation ||
+              currentElement.flipHorizontal !==
+                imageEditingState.flipHorizontal ||
+              currentElement.flipVertical !== imageEditingState.flipVertical;
+
+            if (hasChanges) {
+              const updatedStyle = {
+                opacity: imageEditingState.opacity,
+                rotation: imageEditingState.rotation,
+                flipHorizontal: imageEditingState.flipHorizontal,
+                flipVertical: imageEditingState.flipVertical,
+                x: currentElement.x,
+                y: currentElement.y,
+                width: currentElement.width,
+                height: currentElement.height,
+              };
+
+              handleImageStyleUpdate(
+                selectedImageId,
+                parseInt(pageNumber),
+                updatedStyle
+              );
+            }
+          }
+        }
+      }
+    }, [
+      imageEditingState,
+      selectedImageId,
+      imageElements,
+      handleImageStyleUpdate,
+    ]);
+
+    // Handle image delete from parent toolbar
+    useEffect(() => {
+      if (imageEditingState?.deleteRequested && selectedImageId) {
+        const pageNumber = Object.keys(imageElements).find((page) =>
+          imageElements[page]?.some((image) => image.id === selectedImageId)
+        );
+
+        if (pageNumber) {
+          handleImageDelete(selectedImageId, parseInt(pageNumber));
+        }
+      }
+    }, [
+      imageEditingState?.deleteRequested,
+      selectedImageId,
+      imageElements,
+      handleImageDelete,
+    ]);
+
+    // Handle clear all images
+    useEffect(() => {
+      if (clearAllImageElements) {
+        console.log("🗑️ Clearing all image elements from PDF preview");
+
+        setImageElements({});
+        setSelectedImageId(null);
+
+        if (onClearAllImageComplete) {
+          onClearAllImageComplete();
+        }
+      }
+    }, [clearAllImageElements, onClearAllImageComplete]);
+
+    // Handle delete specific image
+    useEffect(() => {
+      if (deleteSpecificImageElement) {
+        console.log(
+          "🗑️ Deleting specific image element:",
+          deleteSpecificImageElement
+        );
+
+        const { imageId, pageNumber } = deleteSpecificImageElement;
+
+        setImageElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.filter((image) => image.id !== imageId) || [],
+        }));
+
+        if (selectedImageId === imageId) {
+          setSelectedImageId(null);
+        }
+
+        if (onDeleteSpecificImageComplete) {
+          onDeleteSpecificImageComplete();
+        }
+      }
+    }, [
+      deleteSpecificImageElement,
+      selectedImageId,
+      onDeleteSpecificImageComplete,
+    ]);
+
+    // FIXED: Function to render pages based on layout type
     const renderPages = () => {
       if (!documentLoaded || !numPages) return null;
 
@@ -1526,7 +2229,6 @@ const Allpagespreview = memo(
                   <div
                     className="transition-all duration-300 hover:shadow-2xl relative"
                     style={{ transformOrigin: "center center" }}
-                    // REMOVED: onClick handler for page click
                   >
                     <Page
                       pageNumber={currentPage}
@@ -1549,7 +2251,9 @@ const Allpagespreview = memo(
                         setHasError(true);
                       }}
                     />
+                    {/* FIXED: Add missing overlays for magazine layout */}
                     {renderTextOverlay(currentPage)}
+                    {renderImageOverlay(currentPage)}
                   </div>
                 </div>
               </div>
@@ -1588,7 +2292,6 @@ const Allpagespreview = memo(
                           : ""
                       }`}
                       style={{ transformOrigin: "top left" }}
-                      // REMOVED: onClick handler for page click
                     >
                       <Page
                         pageNumber={leftPage}
@@ -1609,7 +2312,9 @@ const Allpagespreview = memo(
                           </div>
                         }
                       />
+                      {/* FIXED: Add missing overlays for left page */}
                       {renderTextOverlay(leftPage)}
+                      {renderImageOverlay(leftPage)}
                     </div>
                   </div>
 
@@ -1623,7 +2328,6 @@ const Allpagespreview = memo(
                             : ""
                         }`}
                         style={{ transformOrigin: "top left" }}
-                        // REMOVED: onClick handler for page click
                       >
                         <Page
                           pageNumber={rightPage}
@@ -1644,7 +2348,9 @@ const Allpagespreview = memo(
                             </div>
                           }
                         />
+                        {/* FIXED: Add missing overlays for right page */}
                         {renderTextOverlay(rightPage)}
+                        {renderImageOverlay(rightPage)}
                       </div>
                     </div>
                   )}
@@ -1691,7 +2397,6 @@ const Allpagespreview = memo(
                             : ""
                         }`}
                         style={{ transformOrigin: "top left" }}
-                        // REMOVED: onClick handler for page click
                       >
                         <Page
                           pageNumber={currentPageNumber}
@@ -1712,7 +2417,9 @@ const Allpagespreview = memo(
                             </div>
                           }
                         />
+                        {/* FIXED: Correct overlays for continuous layout */}
                         {renderTextOverlay(currentPageNumber)}
+                        {renderImageOverlay(currentPageNumber)}
                       </div>
                     </div>
                   </div>
@@ -1840,9 +2547,18 @@ const Allpagespreview = memo(
               </div>
             </div>
           )}
+
+          {/* FIXED: Selected image info */}
+          {selectedImageId && imageEditingState?.showImageToolbar && (
+            <div className="absolute bottom-2 right-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
+              <div className="text-xs text-gray-600 font-medium">
+                Image selected - Use toolbar to edit
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Custom styles for resize cursors */}
+        {/* Custom styles for resize cursors and elements */}
         <style jsx>{`
           .cursor-nw-resize {
             cursor: nw-resize;
@@ -1897,12 +2613,23 @@ const Allpagespreview = memo(
             pointer-events: auto;
           }
 
-          /* Smooth transitions for text elements */
-          .text-element:not(.dragging) {
+          /* FIXED: Add missing image element styles */
+          .image-element {
+            pointer-events: auto;
+          }
+
+          .image-element * {
+            pointer-events: auto;
+          }
+
+          /* Smooth transitions for both text and image elements */
+          .text-element:not(.dragging),
+          .image-element:not(.dragging) {
             transition: box-shadow 0.2s ease, transform 0.1s ease;
           }
 
-          .text-element:hover {
+          .text-element:hover,
+          .image-element:hover {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
           }
         `}</style>
