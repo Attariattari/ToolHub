@@ -24,6 +24,7 @@ import {
   FlipHorizontal,
   RotateCw,
   Edit,
+  GripVertical,
 } from "lucide-react";
 
 import { pdfjs, Document, Page } from "react-pdf";
@@ -287,46 +288,8 @@ export default function PDFViewer() {
   const [clearAllImageElements, setClearAllImageElements] = useState(false);
   const [deleteSpecificImageElement, setDeleteSpecificImageElement] =
     useState(null);
-
-  const fonts = [
-    "Arial",
-    "Helvetica",
-    "Times New Roman",
-    "Courier New",
-    "Verdana",
-    "Georgia",
-    "Tahoma",
-  ];
-  const fontSizes = [
-    "8",
-    "9",
-    "10",
-    "11",
-    "12",
-    "14",
-    "16",
-    "18",
-    "20",
-    "24",
-    "28",
-    "32",
-    "36",
-    "48",
-    "72",
-  ];
-  const zoomLevels = [
-    "25%",
-    "50%",
-    "75%",
-    "100%",
-    "125%",
-    "150%",
-    "200%",
-    "300%",
-    "400%",
-  ];
-
-  const opacityOptions = [25, 50, 75, 100];
+  const [draggedElement, setDraggedElement] = useState(null);
+  const [dragOverElement, setDragOverElement] = useState(null);
   // Refs
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
@@ -697,42 +660,21 @@ export default function PDFViewer() {
   if (isUploading) {
     return <ProgressScreen uploadProgress={uploadProgress} />;
   }
-  // Text editing handlers
-  const closeAllToolbars = (fromButton = null) => {
-    const wasTextToolbarOpen = textEditingState.showTextToolbar;
-    const wasImageToolbarOpen = imageEditingState.showImageToolbar;
-
-    setTextEditingState((prev) => ({
-      ...prev,
-      showTextToolbar: false,
-      addTextToPage: false,
-      onTextAdded: null,
-    }));
-
-    // Sirf tab clear karo jab text se image pe switch kar rahe hain
-    if (wasTextToolbarOpen && fromButton === "image") {
-      // Clear all text elements from state
-      setAllTextElements([]);
-      // CRITICAL FIX: Clear text elements from child component
-      setClearAllTextElements(true);
-    }
-
+  // UPDATED: Toggle text editing mode - ab direct text add hoga
+  const handleTextButtonClick = () => {
+    // Pehle image toolbar band karo (but image elements ko remove nahi karo)
     setImageEditingState((prev) => ({
       ...prev,
       showImageToolbar: false,
     }));
-  };
-  // UPDATED: Toggle text editing mode - ab direct text add hoga
-  const handleTextButtonClick = () => {
-    closeAllToolbars("text");
+
+    // Phir text toolbar kholo
     setTextEditingState((prev) => {
-      // Open text editing mode aur direct text add karo
       const newState = {
         ...initialTextState,
         showTextToolbar: true,
-        addTextToPage: true, // ✅ Signal child to add text
+        addTextToPage: true,
         onTextAdded: () => {
-          // ✅ Reset flag after text is added
           setTextEditingState((prev) => ({
             ...prev,
             addTextToPage: false,
@@ -740,7 +682,6 @@ export default function PDFViewer() {
           }));
         },
       };
-
       return newState;
     });
   };
@@ -875,13 +816,18 @@ export default function PDFViewer() {
   const current = options.find(
     (opt) => opt.value === textEditingState.selectedAlignment
   );
-  // //////////////////////////////////////// //
+
   // For Text Exit
-  // //////////////////////////////////////// //
 
   // 3. Update your handleImageButtonClick function
   const handleImageButtonClick = () => {
-    closeAllToolbars("image");
+    // Pehle text toolbar band karo (but text elements ko remove nahi karo)
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+      addTextToPage: false,
+      onTextAdded: null,
+    }));
 
     // Create a file input element
     const input = document.createElement("input");
@@ -924,6 +870,7 @@ export default function PDFViewer() {
     document.body.appendChild(input);
     input.click();
   };
+
   // 4. Add image callback handlers (similar to text handlers)
   const handleImageAdd = (imageElement) => {
     console.log("Image added:", imageElement);
@@ -986,13 +933,6 @@ export default function PDFViewer() {
       flipVertical: !prev.flipVertical,
     }));
   };
-
-  const handleImageDeleteSelected = () => {
-    setImageEditingState((prev) => ({
-      ...prev,
-      deleteRequested: true,
-    }));
-  };
   // Show upload screen if no files
   if (files.length === 0) {
     return (
@@ -1010,7 +950,99 @@ export default function PDFViewer() {
       />
     );
   }
+  // Function to get combined elements with proper ordering
+  const getCombinedElements = () => {
+    return [...allTextElements, ...allImageElements].sort((a, b) => {
+      // First sort by page number
+      if (a.pageNumber !== b.pageNumber) {
+        return a.pageNumber - b.pageNumber;
+      }
+      // Then sort by order within the same page
+      return (a.order || 0) - (b.order || 0);
+    });
+  };
 
+  // Function to reorder elements
+  const reorderElements = (draggedId, targetId, draggedType, targetType) => {
+    const combinedElements = getCombinedElements();
+    const draggedIndex = combinedElements.findIndex(
+      (el) => el.id === draggedId
+    );
+    const targetIndex = combinedElements.findIndex((el) => el.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    const draggedElement = combinedElements[draggedIndex];
+    const targetElement = combinedElements[targetIndex];
+
+    // Create new order values
+    const reorderedElements = [...combinedElements];
+    reorderedElements.splice(draggedIndex, 1);
+    reorderedElements.splice(targetIndex, 0, draggedElement);
+
+    // Update order values for elements on the same page
+    const pageElements = reorderedElements.filter(
+      (el) => el.pageNumber === draggedElement.pageNumber
+    );
+    pageElements.forEach((element, index) => {
+      element.order = index;
+    });
+
+    // Separate back into text and image arrays
+    const newTextElements = reorderedElements.filter(
+      (el) => el.text !== undefined
+    );
+    const newImageElements = reorderedElements.filter(
+      (el) => el.text === undefined
+    );
+
+    setAllTextElements(newTextElements);
+    setAllImageElements(newImageElements);
+  };
+
+  // Drag handlers
+  const handleDragStart = (e, element, elementType) => {
+    setDraggedElement({ ...element, type: elementType });
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e, element, elementType) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverElement({ ...element, type: elementType });
+  };
+
+  const handleDragLeave = (e) => {
+    // Only clear if we're leaving the element completely
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setDragOverElement(null);
+    }
+  };
+
+  const handleDrop = (e, targetElement, targetType) => {
+    e.preventDefault();
+
+    if (!draggedElement || draggedElement.id === targetElement.id) {
+      setDraggedElement(null);
+      setDragOverElement(null);
+      return;
+    }
+
+    reorderElements(
+      draggedElement.id,
+      targetElement.id,
+      draggedElement.type,
+      targetType
+    );
+
+    setDraggedElement(null);
+    setDragOverElement(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedElement(null);
+    setDragOverElement(null);
+  };
   return (
     <div className="md:h-[calc(100vh-82px)]">
       <div className="grid grid-cols-1 md:grid-cols-12 border h-full">
@@ -1418,7 +1450,7 @@ export default function PDFViewer() {
                 <button
                   className="p-2 hover:bg-red-100 rounded text-red-600"
                   title="Delete Image"
-                  onClick={handleImageDeleteSelected}
+                  onClick={handleDelete}
                 >
                   <Trash2 size={16} />
                 </button>
@@ -1489,6 +1521,9 @@ export default function PDFViewer() {
                           onDeleteSpecificImageComplete={() =>
                             setDeleteSpecificImageElement(null)
                           }
+                          combinedElements={getCombinedElements()}
+                          allTextElements={allTextElements}
+                          allImageElements={allImageElements}
                         />
                       </div>
                     </div>
@@ -1549,8 +1584,7 @@ export default function PDFViewer() {
                   </button>
                 </div>
               )}
-
-              {/* Text Elements by Page */}
+              {/* Elements by Page */}
               {allTextElements.length === 0 && allImageElements.length === 0 ? (
                 <div className="text-center bg-red-50 border-2 border-dashed border-red-200 p-8 rounded-lg text-red-600 mt-8 transition-colors hover:bg-red-100 hover:border-red-300">
                   <Type className="w-16 h-16 mx-auto mb-4 text-red-400" />
@@ -1563,19 +1597,14 @@ export default function PDFViewer() {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Group text elements by page */}
+                  {/* Group elements by page and show in order */}
                   {Object.entries(
-                    [...allTextElements, ...allImageElements].reduce(
-                      (acc, element) => {
-                        const page = element.pageNumber;
-                        if (!acc[page]) acc[page] = { texts: [], images: [] };
-                        if (element.text !== undefined)
-                          acc[page].texts.push(element);
-                        else acc[page].images.push(element);
-                        return acc;
-                      },
-                      {}
-                    )
+                    getCombinedElements().reduce((acc, element) => {
+                      const page = element.pageNumber;
+                      if (!acc[page]) acc[page] = [];
+                      acc[page].push(element);
+                      return acc;
+                    }, {})
                   )
                     .sort(([a], [b]) => parseInt(a) - parseInt(b))
                     .map(([pageNumber, pageElements]) => (
@@ -1586,146 +1615,179 @@ export default function PDFViewer() {
                             Page {pageNumber}
                           </h4>
                           <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                            {pageElements.texts.length +
-                              pageElements.images.length}{" "}
-                            element
-                            {pageElements.texts.length +
-                              pageElements.images.length !==
-                            1
-                              ? "s"
-                              : ""}
+                            {pageElements.length} element
+                            {pageElements.length !== 1 ? "s" : ""}
                           </span>
                         </div>
 
-                        {/* Text Elements */}
-                        {pageElements.texts.map((textElement, index) => (
-                          <div
-                            key={textElement.id}
-                            className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors group mb-2"
-                          >
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600">
-                                <Type className="w-4 h-4" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-gray-900">
-                                  {(() => {
-                                    const text =
-                                      textElement.text ||
-                                      `New Text ${index + 1}`;
-                                    return text.length > 20
-                                      ? text.substring(0, 20) + "..."
-                                      : text;
-                                  })()}
-                                </p>
-                                <div className="flex items-center gap-2 text-xs text-gray-500">
-                                  <span>{textElement.fontFamily}</span>
-                                  <span>•</span>
-                                  <span>{textElement.fontSize}px</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() =>
-                                  handleThumbnailClick(parseInt(pageNumber))
-                                }
-                                className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                title="Edit text"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setAllTextElements((prev) =>
-                                    prev.filter((t) => t.id !== textElement.id)
-                                  );
-                                  setDeleteSpecificElement({
-                                    textId: textElement.id,
-                                    pageNumber: textElement.pageNumber,
-                                  });
-                                }}
-                                className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                title="Delete text"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                        {/* Ordered Elements */}
+                        {pageElements
+                          .sort((a, b) => (a.order || 0) - (b.order || 0))
+                          .map((element, index) => {
+                            const isText = element.text !== undefined;
+                            const isDragging =
+                              draggedElement?.id === element.id;
+                            const isDragOver =
+                              dragOverElement?.id === element.id;
 
-                        {/* Image Elements */}
-                        {pageElements.images.map((imageElement, index) => (
-                          <div
-                            key={imageElement.id}
-                            className="flex items-center justify-between p-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors group mb-2"
-                          >
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
-                                {imageElement.src ? (
-                                  <img
-                                    src={imageElement.src}
-                                    alt="Preview"
-                                    className="w-full h-full object-cover rounded"
-                                  />
-                                ) : (
-                                  <svg
-                                    className="w-4 h-4"
-                                    fill="currentColor"
-                                    viewBox="0 0 20 20"
+                            return (
+                              <div
+                                key={element.id}
+                                draggable
+                                onDragStart={(e) =>
+                                  handleDragStart(
+                                    e,
+                                    element,
+                                    isText ? "text" : "image"
+                                  )
+                                }
+                                onDragOver={(e) =>
+                                  handleDragOver(
+                                    e,
+                                    element,
+                                    isText ? "text" : "image"
+                                  )
+                                }
+                                onDragLeave={handleDragLeave}
+                                onDrop={(e) =>
+                                  handleDrop(
+                                    e,
+                                    element,
+                                    isText ? "text" : "image"
+                                  )
+                                }
+                                onDragEnd={handleDragEnd}
+                                className={`flex items-center justify-between p-3 rounded-lg transition-all group mb-2 cursor-move
+                                ${
+                                  isText
+                                    ? "bg-gray-50 hover:bg-gray-100"
+                                    : "bg-blue-50 hover:bg-blue-100"
+                                }
+                                ${isDragging ? "opacity-50 scale-95" : ""}
+                                ${
+                                  isDragOver
+                                    ? "ring-2 ring-blue-400 bg-blue-100"
+                                    : ""
+                                }
+                              `}
+                              >
+                                {/* Drag Handle */}
+                                <div className="flex items-center gap-3 flex-1">
+                                  <div className="cursor-grab hover:cursor-grabbing text-gray-400 hover:text-gray-600">
+                                    <GripVertical className="w-4 h-4" />
+                                  </div>
+
+                                  <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
+                                    {isText ? (
+                                      <Type className="w-4 h-4" />
+                                    ) : element.src ? (
+                                      <img
+                                        src={element.src}
+                                        alt="Preview"
+                                        className="w-full h-full object-cover rounded"
+                                      />
+                                    ) : (
+                                      <svg
+                                        className="w-4 h-4"
+                                        fill="currentColor"
+                                        viewBox="0 0 20 20"
+                                      >
+                                        <path
+                                          fillRule="evenodd"
+                                          d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"
+                                          clipRule="evenodd"
+                                        />
+                                      </svg>
+                                    )}
+                                  </div>
+
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-gray-900">
+                                      {isText
+                                        ? (() => {
+                                            const text =
+                                              element.text ||
+                                              `New Text ${index + 1}`;
+                                            return text.length > 20
+                                              ? text.substring(0, 20) + "..."
+                                              : text;
+                                          })()
+                                        : `Image ${index + 1}`}
+                                    </p>
+                                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                                      {isText ? (
+                                        <>
+                                          <span>{element.fontFamily}</span>
+                                          <span>•</span>
+                                          <span>{element.fontSize}px</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span>
+                                            {Math.round(element.width)}×
+                                            {Math.round(element.height)}
+                                          </span>
+                                          <span>•</span>
+                                          <span>
+                                            {element.opacity}% opacity
+                                          </span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // handleThumbnailClick(parseInt(pageNumber));
+                                    }}
+                                    className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                    title={`Edit ${isText ? "text" : "image"}`}
                                   >
-                                    <path
-                                      fillRule="evenodd"
-                                      d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"
-                                      clipRule="evenodd"
-                                    />
-                                  </svg>
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-gray-900">
-                                  Image {index + 1}
-                                </p>
-                                <div className="flex items-center gap-2 text-xs text-gray-500">
-                                  <span>
-                                    {Math.round(imageElement.width)}×
-                                    {Math.round(imageElement.height)}
-                                  </span>
-                                  <span>•</span>
-                                  <span>{imageElement.opacity}% opacity</span>
+                                    <Edit className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+
+                                      if (isText) {
+                                        // Delete text element
+                                        setAllTextElements((prev) =>
+                                          prev.filter(
+                                            (t) => t.id !== element.id
+                                          )
+                                        );
+                                        setDeleteSpecificElement({
+                                          textId: element.id,
+                                          pageNumber: element.pageNumber,
+                                        });
+                                      } else {
+                                        // Delete image element
+                                        setAllImageElements((prev) =>
+                                          prev.filter(
+                                            (img) => img.id !== element.id
+                                          )
+                                        );
+                                        setDeleteSpecificImageElement({
+                                          imageId: element.id,
+                                          pageNumber: element.pageNumber,
+                                        });
+                                      }
+                                    }}
+                                    className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                    title={`Delete ${
+                                      isText ? "text" : "image"
+                                    }`}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() =>
-                                  handleThumbnailClick(parseInt(pageNumber))
-                                }
-                                className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                title="Edit image"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setAllImageElements((prev) =>
-                                    prev.filter(
-                                      (img) => img.id !== imageElement.id
-                                    )
-                                  );
-                                  setDeleteSpecificImageElement({
-                                    imageId: imageElement.id,
-                                    pageNumber: imageElement.pageNumber,
-                                  });
-                                }}
-                                className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                title="Delete image"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                            );
+                          })}
                       </div>
                     ))}
                 </div>

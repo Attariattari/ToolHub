@@ -34,9 +34,10 @@ const ResizableTextElement = ({
   });
   const [currentResizeHandle, setCurrentResizeHandle] = useState(null);
   const [clickCount, setClickCount] = useState(0);
+  const [isManuallyResized, setIsManuallyResized] = useState(false); // Track manual resize
   const elementRef = useRef(null);
   const textareaRef = useRef(null);
-  const measureRef = useRef(null); // For measuring text dimensions
+  const measureRef = useRef(null);
   const clickTimeoutRef = useRef(null);
 
   // Calculate scaled dimensions from base coordinates
@@ -55,7 +56,7 @@ const ResizableTextElement = ({
     if (!measureRef.current) return { width: 0, height: 0 };
 
     measureRef.current.style.width = width + "px";
-    measureRef.current.textContent = text || "A"; // Use 'A' as fallback for empty text
+    measureRef.current.textContent = text || "A";
 
     return {
       width: measureRef.current.scrollWidth,
@@ -63,7 +64,7 @@ const ResizableTextElement = ({
     };
   }, []);
 
-  // Auto-resize function
+  // Modified auto-resize function - respects manual resize
   const autoResizeElement = useCallback(
     (text) => {
       if (!elementRef.current || textElement.isEditing) return;
@@ -73,50 +74,58 @@ const ResizableTextElement = ({
       const minWidth = Math.max(80, calculatedFontSize * 4);
       const minHeight = Math.max(40, calculatedFontSize * 2);
 
-      // Measure text with current width
+      // Always measure and adjust height for text content
       const measured = measureTextDimensions(text, (currentWidth * zoom) / 100);
       const measuredBaseHeight = (measured.height * 100) / zoom;
+      let newHeight = Math.max(minHeight, measuredBaseHeight + 16);
 
-      let newHeight = Math.max(minHeight, measuredBaseHeight + 16); // Add padding
+      // Only auto-adjust width if NOT manually resized
       let newWidth = currentWidth;
+      if (!isManuallyResized) {
+        const lines = (text || "").split("\n");
+        const maxLineLength = Math.max(...lines.map((line) => line.length));
+        const charWidth = calculatedFontSize * 0.6;
+        const estimatedWidth = maxLineLength * charWidth;
+        const maxWidthForPage =
+          ((elementRef.current
+            ?.closest("[data-page-number]")
+            ?.querySelector(".react-pdf__Page")
+            ?.getBoundingClientRect()?.width || 500) *
+            100) /
+          zoom;
 
-      // If text is overflowing horizontally, we might need to increase width
-      const lines = (text || "").split("\n");
-      const maxLineLength = Math.max(...lines.map((line) => line.length));
-
-      // Rough estimation: if line is too long, expand width
-      const charWidth = calculatedFontSize * 0.6; // Approximate character width
-      const estimatedWidth = maxLineLength * charWidth;
-      const maxWidthForPage =
-        ((elementRef.current
-          ?.closest("[data-page-number]")
-          ?.querySelector(".react-pdf__Page")
-          ?.getBoundingClientRect()?.width || 500) *
-          100) /
-        zoom;
-
-      if (
-        estimatedWidth > currentWidth &&
-        newWidth < maxWidthForPage - textElement.x
-      ) {
-        newWidth = Math.min(
-          maxWidthForPage - textElement.x,
-          Math.max(currentWidth, estimatedWidth + 20)
-        );
+        if (
+          estimatedWidth > currentWidth &&
+          newWidth < maxWidthForPage - textElement.x
+        ) {
+          newWidth = Math.min(
+            maxWidthForPage - textElement.x,
+            Math.max(currentWidth, estimatedWidth + 20)
+          );
+        }
       }
 
-      // Only update if dimensions actually changed
-      if (
-        Math.abs(newHeight - currentHeight) > 5 ||
-        Math.abs(newWidth - currentWidth) > 5
-      ) {
-        onUpdate({
-          width: newWidth,
-          height: newHeight,
-        });
+      // Update dimensions
+      const updates = {};
+      if (Math.abs(newHeight - currentHeight) > 5) {
+        updates.height = newHeight;
+      }
+      if (!isManuallyResized && Math.abs(newWidth - currentWidth) > 5) {
+        updates.width = newWidth;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        onUpdate(updates);
       }
     },
-    [textElement, calculatedFontSize, zoom, measureTextDimensions, onUpdate]
+    [
+      textElement,
+      calculatedFontSize,
+      zoom,
+      measureTextDimensions,
+      onUpdate,
+      isManuallyResized,
+    ]
   );
 
   // Auto-focus textarea when editing starts
@@ -130,7 +139,7 @@ const ResizableTextElement = ({
     }
   }, [textElement.isEditing]);
 
-  // Function to dynamically adjust text layout based on element dimensions
+  // Modified function to adjust text layout - respects manual resize
   const adjustTextLayout = useCallback(() => {
     if (!elementRef.current || !measureRef.current || textElement.isEditing)
       return;
@@ -141,7 +150,7 @@ const ResizableTextElement = ({
     if (!text) return;
 
     // Set the measuring element to match current element width and styling
-    measureRef.current.style.width = Math.max(60, currentWidth - 12) + "px"; // Subtract padding
+    measureRef.current.style.width = Math.max(60, currentWidth - 12) + "px";
     measureRef.current.style.fontSize = `${calculatedFontSize}px`;
     measureRef.current.style.fontFamily = textElement.fontFamily;
     measureRef.current.style.fontWeight = textElement.isBold
@@ -152,15 +161,14 @@ const ResizableTextElement = ({
       : "normal";
     measureRef.current.textContent = text;
 
-    // Force a reflow to get accurate measurements
     measureRef.current.offsetHeight;
 
     const measuredHeight = measureRef.current.scrollHeight;
     const baseHeight = (measuredHeight * 100) / zoom;
     const minHeight = Math.max(40, calculatedFontSize * 2);
-    const newHeight = Math.max(minHeight, baseHeight + 16); // Add padding
+    const newHeight = Math.max(minHeight, baseHeight + 16);
 
-    // Update height if there's a significant difference
+    // Only update height, respect manual width adjustments
     if (Math.abs(newHeight - textElement.height) > 8) {
       onUpdate({ height: newHeight });
     }
@@ -223,20 +231,19 @@ const ResizableTextElement = ({
     e.stopPropagation();
     e.preventDefault();
 
-    // Don't handle mouse down if we're in editing mode and clicking on textarea
     if (textElement.isEditing && e.target.tagName === "TEXTAREA") {
       return;
     }
 
-    // If currently editing, exit edit mode first
     if (textElement.isEditing) {
       onUpdate({ isEditing: false });
       return;
     }
 
-    // Handle resize handles
+    // Handle resize handles - mark as manually resized
     if (e.target.classList.contains("resize-handle")) {
       setIsResizing(true);
+      setIsManuallyResized(true); // Mark as manually resized
       setCurrentResizeHandle(e.target.dataset.direction);
 
       const rect = elementRef.current.getBoundingClientRect();
@@ -251,18 +258,15 @@ const ResizableTextElement = ({
       return;
     }
 
-    // Handle delete button
     if (e.target.classList.contains("delete-btn")) {
-      return; // Let the delete handler handle this
+      return;
     }
 
-    // Select this element if not selected
     if (!isSelected) {
       onSelect(textElement.id);
       return;
     }
 
-    // Start dragging if already selected
     setIsDragging(true);
     const rect = elementRef.current.getBoundingClientRect();
     setDragStart({
@@ -279,7 +283,6 @@ const ResizableTextElement = ({
 
         const pageRect = pageBounds.element.getBoundingClientRect();
 
-        // Calculate new position in current zoom scale
         const newScaledX = Math.max(
           0,
           Math.min(
@@ -295,7 +298,6 @@ const ResizableTextElement = ({
           )
         );
 
-        // Convert back to base coordinates (zoom-independent)
         const newX = (newScaledX * 100) / zoom;
         const newY = (newScaledY * 100) / zoom;
 
@@ -304,67 +306,60 @@ const ResizableTextElement = ({
         const pageBounds = getPageBoundaries();
         if (!pageBounds) return;
 
-        // Calculate delta in screen coordinates
         const deltaX = e.clientX - resizeStart.x;
         const deltaY = e.clientY - resizeStart.y;
 
-        // Convert delta to base coordinates (zoom-independent)
         const baseDeltaX = (deltaX * 100) / zoom;
         const baseDeltaY = (deltaY * 100) / zoom;
 
-        // Work with base coordinates for consistency
         let newWidth = resizeStart.width;
         let newHeight = resizeStart.height;
         let newX = resizeStart.elementX;
         let newY = resizeStart.elementY;
 
-        // Calculate minimum sizes in base coordinates
         const minWidth = Math.max(80, calculatedFontSize * 4);
         const minHeight = Math.max(40, calculatedFontSize * 2);
 
-        // Apply resize based on handle direction using base coordinates
         switch (currentResizeHandle) {
-          case "se": // Southeast - increase width and height
+          case "se":
             newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
             newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
             break;
-          case "sw": // Southwest - decrease width, increase height, move left
+          case "sw":
             newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
             newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
             newX = resizeStart.elementX + (resizeStart.width - newWidth);
             break;
-          case "ne": // Northeast - increase width, decrease height, move up
+          case "ne":
             newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
             newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
             newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "nw": // Northwest - decrease both, move both
+          case "nw":
             newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
             newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
             newX = resizeStart.elementX + (resizeStart.width - newWidth);
             newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "n": // North - decrease height, move up
+          case "n":
             newHeight = Math.max(minHeight, resizeStart.height - baseDeltaY);
             newY = resizeStart.elementY + (resizeStart.height - newHeight);
             break;
-          case "s": // South - increase height
+          case "s":
             newHeight = Math.max(minHeight, resizeStart.height + baseDeltaY);
             break;
-          case "e": // East - increase width
+          case "e":
             newWidth = Math.max(minWidth, resizeStart.width + baseDeltaX);
             break;
-          case "w": // West - decrease width, move left
+          case "w":
             newWidth = Math.max(minWidth, resizeStart.width - baseDeltaX);
             newX = resizeStart.elementX + (resizeStart.width - newWidth);
             break;
         }
 
-        // Apply boundary constraints in base coordinates
         const pageBaseWidth = (pageBounds.width * 100) / zoom;
         const pageBaseHeight = (pageBounds.height * 100) / zoom;
 
-        // Ensure element stays within page boundaries
         if (newX < 0) {
           newWidth = newWidth + newX;
           newX = 0;
@@ -375,7 +370,6 @@ const ResizableTextElement = ({
           newY = 0;
         }
 
-        // Limit to page boundaries
         if (newX + newWidth > pageBaseWidth) {
           newWidth = pageBaseWidth - newX;
         }
@@ -384,15 +378,12 @@ const ResizableTextElement = ({
           newHeight = pageBaseHeight - newY;
         }
 
-        // Ensure minimum dimensions are maintained
         newWidth = Math.max(minWidth, newWidth);
         newHeight = Math.max(minHeight, newHeight);
 
-        // Final position adjustment to stay within bounds
         newX = Math.max(0, Math.min(pageBaseWidth - newWidth, newX));
         newY = Math.max(0, Math.min(pageBaseHeight - newHeight, newY));
 
-        // Update with base coordinates and trigger immediate layout adjustment
         const newUpdate = {
           width: newWidth,
           height: newHeight,
@@ -423,7 +414,6 @@ const ResizableTextElement = ({
     setIsResizing(false);
     setCurrentResizeHandle(null);
 
-    // Adjust text layout after resizing is complete
     if (isResizing) {
       setTimeout(() => {
         adjustTextLayout();
@@ -431,7 +421,6 @@ const ResizableTextElement = ({
     }
   }, [isResizing, adjustTextLayout]);
 
-  // Throttled mouse move for better performance
   const throttledMouseMove = useCallback(
     (e) => {
       requestAnimationFrame(() => {
@@ -473,7 +462,6 @@ const ResizableTextElement = ({
       e.preventDefault();
       onUpdate({ isEditing: false });
     } else if (e.key === "Enter" && e.shiftKey) {
-      // Allow new line and trigger resize
       setTimeout(() => {
         if (textareaRef.current) {
           textareaRef.current.style.height = "auto";
@@ -500,14 +488,11 @@ const ResizableTextElement = ({
     const newText = e.target.value;
     onTextChange(newText);
 
-    // Auto-resize textarea during typing to fit content
     if (textareaRef.current) {
-      // Reset height to auto to get the correct scrollHeight
       textareaRef.current.style.height = "auto";
       const scrollHeight = textareaRef.current.scrollHeight;
       textareaRef.current.style.height = scrollHeight + "px";
 
-      // Update element height based on textarea content
       const newElementHeight = Math.max(40, (scrollHeight * 100) / zoom + 16);
       if (Math.abs(newElementHeight - textElement.height) > 5) {
         onUpdate({ height: newElementHeight });
@@ -519,7 +504,6 @@ const ResizableTextElement = ({
     e.stopPropagation();
     if (!isDragging && !isResizing) {
       onUpdate({ isEditing: false });
-      // Adjust layout after editing ends
       setTimeout(() => {
         adjustTextLayout();
       }, 100);
@@ -530,34 +514,28 @@ const ResizableTextElement = ({
     e.stopPropagation();
   };
 
-  // Handle single and double click logic
   const handleClick = (e) => {
     e.stopPropagation();
 
-    // If not selected, select it (first click)
     if (!isSelected) {
       onSelect(textElement.id);
       setClickCount(1);
       return;
     }
 
-    // If already selected, handle double-click logic
     if (isSelected) {
       setClickCount((prev) => prev + 1);
 
-      // Clear any existing timeout
       if (clickTimeoutRef.current) {
         clearTimeout(clickTimeoutRef.current);
       }
 
-      // Set timeout for single click action
       clickTimeoutRef.current = setTimeout(() => {
         if (clickCount + 1 === 2 && !textElement.isEditing) {
-          // Double click - enter edit mode
           onUpdate({ isEditing: true });
         }
         setClickCount(0);
-      }, 250); // 250ms timeout for double-click detection
+      }, 250);
     }
   };
 
@@ -574,6 +552,13 @@ const ResizableTextElement = ({
     e.preventDefault();
     onDelete();
   };
+
+  // Reset manual resize flag when text element changes (new element created)
+  useEffect(() => {
+    if (textElement.id) {
+      setIsManuallyResized(false);
+    }
+  }, [textElement.id]);
 
   // Clean up timeout on unmount
   useEffect(() => {
@@ -730,7 +715,7 @@ const ResizableTextElement = ({
                 {["nw", "ne", "sw", "se"].map((direction) => (
                   <div
                     key={direction}
-                    className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+                    className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-md hover:bg-red-600"
                     style={{
                       width: "12px",
                       height: "12px",
@@ -742,7 +727,7 @@ const ResizableTextElement = ({
                       pointerEvents: "auto",
                       transition: "none",
                       zIndex: 1001,
-                      opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
+                      opacity: isSelected ? 1 : 0.8,
                     }}
                     data-direction={direction}
                   />
@@ -752,7 +737,7 @@ const ResizableTextElement = ({
                 {["n", "s", "e", "w"].map((direction) => (
                   <div
                     key={direction}
-                    className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+                    className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-md hover:bg-red-600"
                     style={{
                       width: "10px",
                       height: "10px",
@@ -779,7 +764,7 @@ const ResizableTextElement = ({
                       pointerEvents: "auto",
                       transition: "none",
                       zIndex: 1001,
-                      opacity: isSelected ? 1 : 0.8, // Slightly transparent on hover-only
+                      opacity: isSelected ? 1 : 0.8,
                     }}
                     data-direction={direction}
                   />
@@ -1085,6 +1070,7 @@ const ResizableImageElement = ({
   // Handle single and double click logic
   const handleClick = (e) => {
     e.stopPropagation();
+    e.preventDefault();
 
     // If not selected, select it (first click)
     if (!isSelected) {
@@ -1143,127 +1129,195 @@ const ResizableImageElement = ({
   };
 
   return (
-    <div
-      ref={elementRef}
-      className={`absolute image-element select-none ${
-        isSelected ? "ring-2 ring-blue-400 ring-opacity-60" : ""
-      } ${
-        isDragging
-          ? "cursor-grabbing"
-          : isSelected
-          ? "cursor-grab"
-          : "cursor-default"
-      }`}
-      style={{
-        left: scaledX,
-        top: scaledY,
-        width: scaledWidth,
-        height: scaledHeight,
-        opacity: (imageElement.opacity || 100) / 100,
-        zIndex: isSelected ? 20 : 10,
-        minWidth: "30px",
-        minHeight: "30px",
-        boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
-        border: isSelected ? "2px solid #3b82f6" : "1px solid rgba(0,0,0,0.1)",
-        pointerEvents: "auto",
-        transition: isDragging || isResizing ? "none" : "all 0.2s ease",
-        transform: "translateZ(0)",
-        willChange: isDragging || isResizing ? "transform" : "auto",
-        borderRadius: "4px",
-        overflow: "hidden",
-      }}
-      onMouseDown={handleMouseDown}
-      onClick={handleClick}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      {/* Image content */}
-      <img
-        ref={imageRef}
-        src={imageElement.src}
-        alt="PDF Image"
-        className="w-full h-full object-contain"
+    <>
+      {/* Main container - prevent other selection systems */}
+      <div
+        ref={elementRef}
+        className={`absolute image-element select-none ${
+          isSelected ? "ring-2 ring-red-500 ring-opacity-60" : ""
+        } ${
+          isDragging
+            ? "cursor-grabbing"
+            : isSelected
+            ? "cursor-grab"
+            : "cursor-default"
+        }`}
         style={{
-          transform: getTransformStyle(),
-          transformOrigin: "center center",
-          transition: isDragging || isResizing ? "none" : "transform 0.2s ease",
+          left: scaledX,
+          top: scaledY,
+          width: scaledWidth,
+          height: scaledHeight,
+          opacity: (imageElement.opacity || 100) / 100,
+          zIndex: isSelected ? 30 : 10, // Higher z-index to prevent other controls
+          minWidth: "30px",
+          minHeight: "30px",
+          boxShadow: isSelected ? "0 2px 8px rgba(0, 0, 0, 0.15)" : "none",
+          pointerEvents: "auto",
+          transition: isDragging || isResizing ? "none" : "all 0.2s ease",
+          transform: "translateZ(0)",
+          willChange: isDragging || isResizing ? "transform" : "auto",
+          borderRadius: "4px",
+          overflow: "visible",
+          // Prevent other selection systems
+          userSelect: "none",
+          WebkitUserSelect: "none",
         }}
-        onLoad={handleImageLoad}
-        onError={handleImageError}
-        draggable={false}
-      />
+        onMouseDown={handleMouseDown}
+        onClick={handleClick}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        data-no-external-controls="true"
+      >
+        {/* Image content container */}
+        <div
+          className="relative w-full h-full"
+          style={{
+            borderRadius: "4px",
+            overflow: "hidden",
+          }}
+        >
+          <img
+            ref={imageRef}
+            src={imageElement.src}
+            alt="PDF Image"
+            className="w-full h-full object-contain"
+            style={{
+              transform: getTransformStyle(),
+              transformOrigin: "center center",
+              transition:
+                isDragging || isResizing ? "none" : "transform 0.2s ease",
+            }}
+            onLoad={handleImageLoad}
+            onError={handleImageError}
+            draggable={false}
+          />
 
-      {/* Loading overlay */}
-      {!imageLoaded && (
-        <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
-          <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
+          {/* Loading overlay */}
+          {!imageLoaded && (
+            <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
+              <div className="w-6 h-6 border-2 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Controls - show on selection OR hover */}
-      {(isSelected || isHovered) && (
-        <>
-          {/* Resize handles */}
-          {["nw", "ne", "sw", "se"].map((direction) => (
+        {/* Controls - show on selection OR hover - positioned outside the main container */}
+        {(isSelected || isHovered) && (
+          <>
+            {/* Corner resize handles - positioned relative to the container */}
             <div
-              key={direction}
-              className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "14px",
+                height: "14px",
+                cursor: getCursorStyle("nw"),
+                top: "-7px",
+                left: "-7px",
+                pointerEvents: "auto",
+                zIndex: 20, // Even higher than main container
+              }}
+              data-direction="nw"
+            />
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "14px",
+                height: "14px",
+                cursor: getCursorStyle("ne"),
+                top: "-7px",
+                right: "-7px",
+                pointerEvents: "auto",
+                zIndex: 21,
+              }}
+              data-direction="ne"
+            />
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "14px",
+                height: "14px",
+                cursor: getCursorStyle("sw"),
+                bottom: "-7px",
+                left: "-7px",
+                pointerEvents: "auto",
+                zIndex: 21,
+              }}
+              data-direction="sw"
+            />
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "14px",
+                height: "14px",
+                cursor: getCursorStyle("se"),
+                bottom: "-7px",
+                right: "-7px",
+                pointerEvents: "auto",
+                zIndex: 21,
+              }}
+              data-direction="se"
+            />
+
+            {/* Side handles */}
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
               style={{
                 width: "12px",
                 height: "12px",
-                cursor: getCursorStyle(direction),
-                top: direction.includes("n") ? "-6px" : undefined,
-                bottom: direction.includes("s") ? "-6px" : undefined,
-                left: direction.includes("w") ? "-6px" : undefined,
-                right: direction.includes("e") ? "-6px" : undefined,
+                cursor: getCursorStyle("n"),
+                top: "-6px",
+                left: "50%",
+                transform: "translateX(-50%)",
                 pointerEvents: "auto",
-                transition: "none",
-                zIndex: 1001,
-                opacity: isSelected ? 1 : 0.8,
+                zIndex: 21,
               }}
-              data-direction={direction}
+              data-direction="n"
             />
-          ))}
-
-          {/* Side handles */}
-          {["n", "s", "e", "w"].map((direction) => (
             <div
-              key={direction}
-              className="resize-handle absolute bg-blue-500 border-2 border-white rounded-full shadow-md hover:bg-blue-600"
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
               style={{
-                width: "10px",
-                height: "10px",
-                cursor: getCursorStyle(direction),
-                top:
-                  direction === "n"
-                    ? "-5px"
-                    : direction === "s"
-                    ? undefined
-                    : "50%",
-                bottom: direction === "s" ? "-5px" : undefined,
-                left:
-                  direction === "w"
-                    ? "-5px"
-                    : direction === "e"
-                    ? undefined
-                    : "50%",
-                right: direction === "e" ? "-5px" : undefined,
-                transform: ["n", "s"].includes(direction)
-                  ? "translateX(-50%)"
-                  : ["e", "w"].includes(direction)
-                  ? "translateY(-50%)"
-                  : undefined,
+                width: "12px",
+                height: "12px",
+                cursor: getCursorStyle("s"),
+                bottom: "-6px",
+                left: "50%",
+                transform: "translateX(-50%)",
                 pointerEvents: "auto",
-                transition: "none",
-                zIndex: 1001,
-                opacity: isSelected ? 1 : 0.8,
+                zIndex: 21,
               }}
-              data-direction={direction}
+              data-direction="s"
             />
-          ))}
-        </>
-      )}
-    </div>
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "12px",
+                height: "12px",
+                cursor: getCursorStyle("e"),
+                top: "50%",
+                right: "-6px",
+                transform: "translateY(-50%)",
+                pointerEvents: "auto",
+                zIndex: 21,
+              }}
+              data-direction="e"
+            />
+            <div
+              className="resize-handle absolute bg-red-500 border-2 border-white rounded-full shadow-lg hover:bg-red-600 hover:scale-110 transition-all duration-150"
+              style={{
+                width: "12px",
+                height: "12px",
+                cursor: getCursorStyle("w"),
+                top: "50%",
+                left: "-6px",
+                transform: "translateY(-50%)",
+                pointerEvents: "auto",
+                zIndex: 21,
+              }}
+              data-direction="w"
+            />
+          </>
+        )}
+      </div>
+    </>
   );
 };
 const Allpagespreview = memo(
@@ -1297,6 +1351,9 @@ const Allpagespreview = memo(
     onClearAllImageComplete = null,
     deleteSpecificImageElement = null,
     onDeleteSpecificImageComplete = null,
+    allTextElements = [],
+    allImageElements = [],
+    combinedElements = [],
   }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [hasError, setHasError] = useState(false);
@@ -1315,6 +1372,93 @@ const Allpagespreview = memo(
     const lastUserClickedPageRef = useRef(null);
     const [imageElements, setImageElements] = useState({});
     const [selectedImageId, setSelectedImageId] = useState(null);
+
+    // Simplified Z-Index management state
+    const [elementZIndices, setElementZIndices] = useState({});
+    const [nextZIndex, setNextZIndex] = useState(100); // Start from 100 to avoid conflicts
+
+    console.log("combinedElements", combinedElements);
+
+    // Simple function to get next available z-index
+    const getNextZIndex = useCallback(() => {
+      const newZIndex = nextZIndex;
+      setNextZIndex((prev) => prev + 1);
+      return newZIndex;
+    }, [nextZIndex]);
+
+    // Function to bring element to top - immediate update
+    const bringElementToTop = useCallback(
+      (elementId, elementType) => {
+        const newZIndex = getNextZIndex();
+        const key = `${elementType}_${elementId}`;
+
+        setElementZIndices((prev) => ({
+          ...prev,
+          [key]: newZIndex,
+        }));
+
+        console.log(
+          `${elementType} ${elementId} brought to top with z-index: ${newZIndex}`
+        );
+        return newZIndex;
+      },
+      [getNextZIndex]
+    );
+
+    // Function to get element z-index with fallback
+    const getElementZIndex = useCallback(
+      (elementId, elementType) => {
+        const key = `${elementType}_${elementId}`;
+        return elementZIndices[key] || 10; // Default low z-index
+      },
+      [elementZIndices]
+    );
+
+    // Function to assign z-index to new element
+    const assignZIndexToNewElement = useCallback(
+      (elementId, elementType) => {
+        const newZIndex = getNextZIndex();
+        const key = `${elementType}_${elementId}`;
+
+        setElementZIndices((prev) => ({
+          ...prev,
+          [key]: newZIndex,
+        }));
+
+        console.log(
+          `New ${elementType} element created with z-index: ${newZIndex}`
+        );
+        return newZIndex;
+      },
+      [getNextZIndex]
+    );
+
+    // Initialize z-index for existing elements from combinedElements
+    useEffect(() => {
+      if (combinedElements.length > 0) {
+        const newZIndices = {};
+        let currentZIndex = nextZIndex;
+
+        combinedElements.forEach((element) => {
+          const elementType = element.text !== undefined ? "text" : "image";
+          const key = `${elementType}_${element.id}`;
+
+          // Only assign if not already assigned
+          if (!elementZIndices[key]) {
+            newZIndices[key] = currentZIndex;
+            currentZIndex++;
+          }
+        });
+
+        if (Object.keys(newZIndices).length > 0) {
+          setElementZIndices((prev) => ({
+            ...prev,
+            ...newZIndices,
+          }));
+          setNextZIndex(currentZIndex);
+        }
+      }
+    }, [combinedElements, elementZIndices, nextZIndex]);
 
     // Calculate PDF width based on layout
     const actualPDFWidth = useMemo(() => {
@@ -1370,6 +1514,16 @@ const Allpagespreview = memo(
       []
     );
 
+    // Clean up z-indices when elements are deleted
+    const cleanupZIndex = useCallback((elementId, elementType) => {
+      const key = `${elementType}_${elementId}`;
+      setElementZIndices((prev) => {
+        const newIndices = { ...prev };
+        delete newIndices[key];
+        return newIndices;
+      });
+    }, []);
+
     // Handle delete specific text element
     useEffect(() => {
       if (deleteSpecificElement) {
@@ -1392,12 +1546,20 @@ const Allpagespreview = memo(
           setSelectedTextId(null);
         }
 
+        // Clean up z-index
+        cleanupZIndex(textId, "text");
+
         // Notify parent that deletion is complete
         if (onDeleteSpecificComplete) {
           onDeleteSpecificComplete();
         }
       }
-    }, [deleteSpecificElement, selectedTextId, onDeleteSpecificComplete]);
+    }, [
+      deleteSpecificElement,
+      selectedTextId,
+      onDeleteSpecificComplete,
+      cleanupZIndex,
+    ]);
 
     // Intersection observer for component visibility
     useEffect(() => {
@@ -1469,7 +1631,6 @@ const Allpagespreview = memo(
       )
         return;
 
-      // Dynamic threshold based on zoom level
       const getThresholdForZoom = (zoom) => {
         if (zoom <= 50) return [0.1, 0.3, 0.6];
         if (zoom <= 75) return [0.15, 0.4, 0.7];
@@ -1477,7 +1638,6 @@ const Allpagespreview = memo(
         return [0.25, 0.5, 0.9];
       };
 
-      // Dynamic root margin based on zoom level
       const getRootMarginForZoom = (zoom) => {
         if (zoom <= 50) return "-5% 0px -5% 0px";
         if (zoom <= 75) return "-8% 0px -8% 0px";
@@ -1682,6 +1842,30 @@ const Allpagespreview = memo(
       [imageElements, onImageUpdate]
     );
 
+    // Updated text element selection handler
+    const handleTextSelect = useCallback(
+      (textId) => {
+        setSelectedTextId(textId);
+        setSelectedImageId(null); // Deselect image when selecting text
+
+        // Immediately bring to top
+        bringElementToTop(textId, "text");
+      },
+      [bringElementToTop]
+    );
+
+    // Updated image element selection handler
+    const handleImageSelect = useCallback(
+      (imageId) => {
+        setSelectedImageId(imageId);
+        setSelectedTextId(null); // Deselect text when selecting image
+
+        // Immediately bring to top
+        bringElementToTop(imageId, "image");
+      },
+      [bringElementToTop]
+    );
+
     const handleTextDelete = useCallback(
       (textId, pageNumber) => {
         setTextElements((prev) => ({
@@ -1694,11 +1878,14 @@ const Allpagespreview = memo(
           setSelectedTextId(null);
         }
 
+        // Clean up z-index
+        cleanupZIndex(textId, "text");
+
         if (onTextDelete) {
           onTextDelete(textId, pageNumber);
         }
       },
-      [selectedTextId, onTextDelete]
+      [selectedTextId, onTextDelete, cleanupZIndex]
     );
 
     const handleImageDelete = useCallback(
@@ -1713,11 +1900,14 @@ const Allpagespreview = memo(
           setSelectedImageId(null);
         }
 
+        // Clean up z-index
+        cleanupZIndex(imageId, "image");
+
         if (onImageDelete) {
           onImageDelete(imageId, pageNumber);
         }
       },
-      [selectedImageId, onImageDelete]
+      [selectedImageId, onImageDelete, cleanupZIndex]
     );
 
     // Handle clear all text elements from parent
@@ -1735,6 +1925,17 @@ const Allpagespreview = memo(
           setTextElements({});
           setSelectedTextId(null);
 
+          // Clear text z-indices
+          setElementZIndices((prev) => {
+            const newIndices = { ...prev };
+            Object.keys(newIndices).forEach((key) => {
+              if (key.startsWith("text_")) {
+                delete newIndices[key];
+              }
+            });
+            return newIndices;
+          });
+
           if (onClearAllComplete) {
             onClearAllComplete();
           }
@@ -1742,7 +1943,7 @@ const Allpagespreview = memo(
       }
     }, [clearAllTextElements, onClearAllComplete]);
 
-    // Listen for text additions from parent
+    // Updated text addition effect
     useEffect(() => {
       if (textEditingState?.addTextToPage && currentPage) {
         const pageNumber = currentPage;
@@ -1775,7 +1976,10 @@ const Allpagespreview = memo(
           [pageNumber]: [...(prev[pageNumber] || []), newTextElement],
         }));
 
+        // Assign z-index and select
+        assignZIndexToNewElement(textId, "text");
         setSelectedTextId(textId);
+        setSelectedImageId(null);
 
         if (onTextAdd) {
           onTextAdd(newTextElement);
@@ -1790,6 +1994,7 @@ const Allpagespreview = memo(
       currentPage,
       textEditingState,
       onTextAdd,
+      assignZIndexToNewElement,
     ]);
 
     // Update selected text styles from toolbar
@@ -1907,7 +2112,7 @@ const Allpagespreview = memo(
       handleTextDelete,
     ]);
 
-    // FIXED: Click outside handler for both text and image elements
+    // Click outside handler for both text and image elements
     useEffect(() => {
       const handleClickOutside = (e) => {
         // Don't do anything if clicking on text or image elements or their controls
@@ -1948,36 +2153,46 @@ const Allpagespreview = memo(
       imageEditingState?.showImageToolbar,
     ]);
 
-    // Text overlay component
+    // Updated text overlay render function with real-time z-index
     const renderTextOverlay = useCallback(
       (pageNumber) => {
         const pageTexts = textElements[pageNumber] || [];
         if (pageTexts.length === 0) return null;
 
         return (
-          <div
-            className="absolute inset-0"
-            style={{
-              pointerEvents: "none",
-            }}
-          >
-            {pageTexts.map((textElement) => (
-              <ResizableTextElement
-                key={textElement.id}
-                textElement={textElement}
-                isSelected={selectedTextId === textElement.id}
-                onSelect={setSelectedTextId}
-                onUpdate={(updates) =>
-                  handleTextStyleUpdate(textElement.id, pageNumber, updates)
-                }
-                onDelete={() => handleTextDelete(textElement.id, pageNumber)}
-                onTextChange={(newText) =>
-                  handleTextChange(textElement.id, pageNumber, newText)
-                }
-                pageScale={pageScale}
-                zoom={userZoom}
-              />
-            ))}
+          <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+            {pageTexts.map((textElement) => {
+              const zIndex = getElementZIndex(textElement.id, "text");
+
+              return (
+                <div
+                  key={textElement.id}
+                  style={{
+                    position: "absolute",
+                    zIndex: zIndex,
+                    pointerEvents: "auto",
+                  }}
+                >
+                  <ResizableTextElement
+                    textElement={textElement}
+                    isSelected={selectedTextId === textElement.id}
+                    onSelect={() => handleTextSelect(textElement.id)}
+                    onUpdate={(updates) =>
+                      handleTextStyleUpdate(textElement.id, pageNumber, updates)
+                    }
+                    onDelete={() =>
+                      handleTextDelete(textElement.id, pageNumber)
+                    }
+                    onTextChange={(newText) =>
+                      handleTextChange(textElement.id, pageNumber, newText)
+                    }
+                    pageScale={pageScale}
+                    zoom={userZoom}
+                    zIndex={zIndex}
+                  />
+                </div>
+              );
+            })}
           </div>
         );
       },
@@ -1989,36 +2204,52 @@ const Allpagespreview = memo(
         handleTextStyleUpdate,
         handleTextDelete,
         handleTextChange,
+        getElementZIndex,
+        handleTextSelect,
       ]
     );
 
-    // FIXED: Image overlay component
+    // Updated image overlay render function with real-time z-index
     const renderImageOverlay = useCallback(
       (pageNumber) => {
         const pageImages = imageElements[pageNumber] || [];
         if (pageImages.length === 0) return null;
 
         return (
-          <div
-            className="absolute inset-0"
-            style={{
-              pointerEvents: "none",
-            }}
-          >
-            {pageImages.map((imageElement) => (
-              <ResizableImageElement
-                key={imageElement.id}
-                imageElement={imageElement}
-                isSelected={selectedImageId === imageElement.id}
-                onSelect={setSelectedImageId}
-                onUpdate={(updates) =>
-                  handleImageStyleUpdate(imageElement.id, pageNumber, updates)
-                }
-                onDelete={() => handleImageDelete(imageElement.id, pageNumber)}
-                pageScale={pageScale}
-                zoom={userZoom}
-              />
-            ))}
+          <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
+            {pageImages.map((imageElement) => {
+              const zIndex = getElementZIndex(imageElement.id, "image");
+
+              return (
+                <div
+                  key={imageElement.id}
+                  style={{
+                    position: "absolute",
+                    zIndex: zIndex,
+                    pointerEvents: "auto",
+                  }}
+                >
+                  <ResizableImageElement
+                    imageElement={imageElement}
+                    isSelected={selectedImageId === imageElement.id}
+                    onSelect={() => handleImageSelect(imageElement.id)}
+                    onUpdate={(updates) =>
+                      handleImageStyleUpdate(
+                        imageElement.id,
+                        pageNumber,
+                        updates
+                      )
+                    }
+                    onDelete={() =>
+                      handleImageDelete(imageElement.id, pageNumber)
+                    }
+                    pageScale={pageScale}
+                    zoom={userZoom}
+                    zIndex={zIndex}
+                  />
+                </div>
+              );
+            })}
           </div>
         );
       },
@@ -2029,10 +2260,12 @@ const Allpagespreview = memo(
         userZoom,
         handleImageStyleUpdate,
         handleImageDelete,
+        getElementZIndex,
+        handleImageSelect,
       ]
     );
 
-    // Listen for image additions from parent
+    // Updated image addition effect
     useEffect(() => {
       if (
         imageEditingState?.addImageToPage &&
@@ -2063,7 +2296,10 @@ const Allpagespreview = memo(
           [pageNumber]: [...(prev[pageNumber] || []), newImageElement],
         }));
 
+        // Assign z-index and select
+        assignZIndexToNewElement(imageId, "image");
         setSelectedImageId(imageId);
+        setSelectedTextId(null);
 
         if (onImageAdd) {
           onImageAdd(newImageElement);
@@ -2079,6 +2315,7 @@ const Allpagespreview = memo(
       imageEditingState?.selectedImageSrc,
       imageEditingState,
       onImageAdd,
+      assignZIndexToNewElement,
     ]);
 
     // Update selected image styles from toolbar
@@ -2155,6 +2392,17 @@ const Allpagespreview = memo(
         setImageElements({});
         setSelectedImageId(null);
 
+        // Clear image z-indices
+        setElementZIndices((prev) => {
+          const newIndices = { ...prev };
+          Object.keys(newIndices).forEach((key) => {
+            if (key.startsWith("image_")) {
+              delete newIndices[key];
+            }
+          });
+          return newIndices;
+        });
+
         if (onClearAllImageComplete) {
           onClearAllImageComplete();
         }
@@ -2181,6 +2429,9 @@ const Allpagespreview = memo(
           setSelectedImageId(null);
         }
 
+        // Clean up z-index
+        cleanupZIndex(imageId, "image");
+
         if (onDeleteSpecificImageComplete) {
           onDeleteSpecificImageComplete();
         }
@@ -2189,9 +2440,10 @@ const Allpagespreview = memo(
       deleteSpecificImageElement,
       selectedImageId,
       onDeleteSpecificImageComplete,
+      cleanupZIndex,
     ]);
 
-    // FIXED: Function to render pages based on layout type
+    // Function to render pages based on layout type
     const renderPages = () => {
       if (!documentLoaded || !numPages) return null;
 
@@ -2217,7 +2469,7 @@ const Allpagespreview = memo(
                         onClick={() => onPageChange && onPageChange(pageNum)}
                         className={`w-2 h-2 rounded-full transition-all duration-200 ${
                           pageNum === currentPage
-                            ? "bg-blue-600 w-6"
+                            ? "bg-red-600 w-6"
                             : "bg-gray-300 hover:bg-gray-400"
                         }`}
                       />
@@ -2237,10 +2489,10 @@ const Allpagespreview = memo(
                       renderAnnotationLayer={false}
                       className="shadow-xl border-2 border-gray-200 rounded-lg transition-all duration-300 ease-in-out"
                       loading={
-                        <div className="w-full h-full bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center rounded-lg">
+                        <div className="w-full h-full bg-gradient-to-br from-red-50 to-indigo-100 flex items-center justify-center rounded-lg">
                           <div className="flex flex-col items-center space-y-4">
-                            <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                            <div className="text-blue-700 font-medium">
+                            <div className="w-8 h-8 border-4 border-red-200 border-t-red-600 rounded-full animate-spin" />
+                            <div className="text-red-700 font-medium">
                               Loading page {currentPage}...
                             </div>
                           </div>
@@ -2251,7 +2503,6 @@ const Allpagespreview = memo(
                         setHasError(true);
                       }}
                     />
-                    {/* FIXED: Add missing overlays for magazine layout */}
                     {renderTextOverlay(currentPage)}
                     {renderImageOverlay(currentPage)}
                   </div>
@@ -2312,7 +2563,6 @@ const Allpagespreview = memo(
                           </div>
                         }
                       />
-                      {/* FIXED: Add missing overlays for left page */}
                       {renderTextOverlay(leftPage)}
                       {renderImageOverlay(leftPage)}
                     </div>
@@ -2348,7 +2598,6 @@ const Allpagespreview = memo(
                             </div>
                           }
                         />
-                        {/* FIXED: Add missing overlays for right page */}
                         {renderTextOverlay(rightPage)}
                         {renderImageOverlay(rightPage)}
                       </div>
@@ -2417,7 +2666,6 @@ const Allpagespreview = memo(
                             </div>
                           }
                         />
-                        {/* FIXED: Correct overlays for continuous layout */}
                         {renderTextOverlay(currentPageNumber)}
                         {renderImageOverlay(currentPageNumber)}
                       </div>
@@ -2548,7 +2796,7 @@ const Allpagespreview = memo(
             </div>
           )}
 
-          {/* FIXED: Selected image info */}
+          {/* Selected image info */}
           {selectedImageId && imageEditingState?.showImageToolbar && (
             <div className="absolute bottom-2 right-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
               <div className="text-xs text-gray-600 font-medium">
@@ -2613,7 +2861,6 @@ const Allpagespreview = memo(
             pointer-events: auto;
           }
 
-          /* FIXED: Add missing image element styles */
           .image-element {
             pointer-events: auto;
           }
