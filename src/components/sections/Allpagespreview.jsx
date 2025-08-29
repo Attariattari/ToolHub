@@ -1320,6 +1320,682 @@ const ResizableImageElement = ({
     </>
   );
 };
+// Fixed DrawElement Component
+const DrawElement = ({
+  drawEditingState,
+  onDrawAdd,
+  onDrawUpdate,
+  onDrawDelete,
+  clearAllDrawElements,
+  onClearAllDrawComplete,
+  deleteSpecificDrawElement,
+  onDeleteSpecificDrawComplete,
+  zoom = 100,
+  pageNumber,
+}) => {
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentPath, setCurrentPath] = useState([]);
+  const [currentElement, setCurrentElement] = useState(null);
+  const [allDrawElements, setAllDrawElements] = useState([]);
+  const [hoveredElementId, setHoveredElementId] = useState(null);
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
+
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const drawingIdRef = useRef(1);
+  const lastPointRef = useRef(null);
+  const animationFrameRef = useRef(null);
+
+  // Clear all elements when parent requests
+  useEffect(() => {
+    if (clearAllDrawElements) {
+      setAllDrawElements([]);
+      onClearAllDrawComplete?.();
+    }
+  }, [clearAllDrawElements, onClearAllDrawComplete]);
+
+  // ✅ FIXED: Delete specific element when parent requests
+  useEffect(() => {
+    if (deleteSpecificDrawElement) {
+      console.log(
+        "🗑️ DrawElement: Deleting specific draw element:",
+        deleteSpecificDrawElement
+      );
+
+      // Check if it's object with drawId and pageNumber or just the ID
+      const drawIdToDelete =
+        deleteSpecificDrawElement.drawId || deleteSpecificDrawElement;
+      const elementPageNumber =
+        deleteSpecificDrawElement.pageNumber || pageNumber;
+
+      // Only delete if it's for this page
+      if (elementPageNumber === pageNumber) {
+        setAllDrawElements((prev) => {
+          const filtered = prev.filter(
+            (element) => element.id !== drawIdToDelete
+          );
+          console.log(
+            `🗑️ DrawElement: Removed element ${drawIdToDelete}, remaining:`,
+            filtered.length
+          );
+          return filtered;
+        });
+      }
+
+      onDeleteSpecificDrawComplete?.();
+    }
+  }, [deleteSpecificDrawElement, onDeleteSpecificDrawComplete, pageNumber]);
+
+  // Enhanced coordinate conversion with better precision
+  const getPageBoundaries = useCallback(() => {
+    if (!containerRef.current) return null;
+
+    const pageElement = containerRef.current.closest("[data-page-number]");
+    if (!pageElement) return null;
+
+    const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
+    if (!pdfPageElement) return null;
+
+    const pageRect = pdfPageElement.getBoundingClientRect();
+    return {
+      width: pageRect.width,
+      height: pageRect.height,
+      element: pdfPageElement,
+      rect: pageRect,
+    };
+  }, []);
+
+  // Improved coordinate conversion
+  const screenToPdfCoordinates = useCallback(
+    (clientX, clientY) => {
+      const pageBounds = getPageBoundaries();
+      if (!pageBounds) return { x: 0, y: 0 };
+
+      const pageRect = pageBounds.rect;
+      const scaledX = Math.max(
+        0,
+        Math.min(clientX - pageRect.left, pageRect.width)
+      );
+      const scaledY = Math.max(
+        0,
+        Math.min(clientY - pageRect.top, pageRect.height)
+      );
+
+      return {
+        x: (scaledX * 100) / zoom,
+        y: (scaledY * 100) / zoom,
+      };
+    },
+    [zoom, getPageBoundaries]
+  );
+
+  // Generate unique ID with better format
+  const generateId = () => {
+    return `draw-${pageNumber}-${Date.now()}-${drawingIdRef.current++}`;
+  };
+
+  // Enhanced arrow head creation
+  const createArrowHead = (fromX, fromY, toX, toY, arrowLength = 12) => {
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    const arrowAngle = Math.PI / 6; // 30 degrees
+
+    const arrowX1 = toX - arrowLength * Math.cos(angle - arrowAngle);
+    const arrowY1 = toY - arrowLength * Math.sin(angle - arrowAngle);
+    const arrowX2 = toX - arrowLength * Math.cos(angle + arrowAngle);
+    const arrowY2 = toY - arrowLength * Math.sin(angle + arrowAngle);
+
+    return `M${toX},${toY} L${arrowX1},${arrowY1} M${toX},${toY} L${arrowX2},${arrowY2}`;
+  };
+
+  // Improved brush path smoothing
+  const smoothPath = (points) => {
+    if (points.length < 3) return points;
+
+    const smoothed = [points[0]];
+
+    for (let i = 1; i < points.length - 1; i++) {
+      const prev = points[i - 1];
+      const current = points[i];
+      const next = points[i + 1];
+
+      // Apply simple smoothing
+      const smoothedPoint = {
+        x: (prev.x + current.x + next.x) / 3,
+        y: (prev.y + current.y + next.y) / 3,
+      };
+
+      smoothed.push(smoothedPoint);
+    }
+
+    smoothed.push(points[points.length - 1]);
+    return smoothed;
+  };
+
+  // Enhanced brush path generation with better smoothing
+  const generateBrushPath = (points, smooth = true) => {
+    if (points.length < 1) return "";
+    if (points.length === 1) {
+      // Single point - draw a small circle
+      return `M ${points[0].x} ${points[0].y} A 0.5 0.5 0 1 1 ${
+        points[0].x + 0.1
+      } ${points[0].y}`;
+    }
+
+    const processedPoints = smooth ? smoothPath(points) : points;
+    let path = `M ${processedPoints[0].x} ${processedPoints[0].y}`;
+
+    if (processedPoints.length === 2) {
+      path += ` L ${processedPoints[1].x} ${processedPoints[1].y}`;
+    } else {
+      // Use quadratic bezier curves for smoother lines
+      for (let i = 1; i < processedPoints.length - 1; i++) {
+        const current = processedPoints[i];
+        const next = processedPoints[i + 1];
+        const midX = (current.x + next.x) / 2;
+        const midY = (current.y + next.y) / 2;
+
+        path += ` Q ${current.x} ${current.y} ${midX} ${midY}`;
+      }
+
+      // Add the last point
+      const lastPoint = processedPoints[processedPoints.length - 1];
+      path += ` T ${lastPoint.x} ${lastPoint.y}`;
+    }
+
+    return path;
+  };
+
+  // Distance calculation for point-to-line proximity
+  const distanceToElement = (element, point) => {
+    const threshold = 10; // pixels
+
+    if (element.type === "brush") {
+      // For brush strokes, check distance to any point in the path
+      return element.points.some((p) => {
+        const scaledP = { x: (p.x * zoom) / 100, y: (p.y * zoom) / 100 };
+        const distance = Math.sqrt(
+          Math.pow(scaledP.x - point.x, 2) + Math.pow(scaledP.y - point.y, 2)
+        );
+        return distance <= threshold;
+      });
+    } else if (element.type === "line" || element.type === "arrow") {
+      // For lines/arrows, calculate distance to line segment
+      const startX = (element.startX * zoom) / 100;
+      const startY = (element.startY * zoom) / 100;
+      const endX = (element.endX * zoom) / 100;
+      const endY = (element.endY * zoom) / 100;
+
+      const A = point.x - startX;
+      const B = point.y - startY;
+      const C = endX - startX;
+      const D = endY - startY;
+
+      const dot = A * C + B * D;
+      const lenSq = C * C + D * D;
+
+      if (lenSq === 0) return Math.sqrt(A * A + B * B) <= threshold;
+
+      let t = Math.max(0, Math.min(1, dot / lenSq));
+      const projection = { x: startX + t * C, y: startY + t * D };
+
+      const distance = Math.sqrt(
+        Math.pow(point.x - projection.x, 2) +
+          Math.pow(point.y - projection.y, 2)
+      );
+
+      return distance <= threshold;
+    }
+
+    return false;
+  };
+
+  // ✅ FIXED: Handle element deletion with better state management
+  const handleElementClick = useCallback(
+    (elementId, event) => {
+      if (drawEditingState?.selectedTool === "eraser" || isDeleteMode) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        console.log("🗑️ DrawElement: Local delete of element:", elementId);
+
+        // Remove from local state
+        setAllDrawElements((prev) => {
+          const filtered = prev.filter((el) => el.id !== elementId);
+          console.log(
+            `🗑️ DrawElement: Local state updated, remaining:`,
+            filtered.length
+          );
+          return filtered;
+        });
+
+        // Notify parent - pass both ID and pageNumber for consistency
+        onDrawDelete?.(elementId, pageNumber);
+      }
+    },
+    [drawEditingState?.selectedTool, isDeleteMode, onDrawDelete, pageNumber]
+  );
+
+  // Enhanced mouse down handler
+  const handleMouseDown = useCallback(
+    (e) => {
+      if (
+        !drawEditingState?.addDrawingToPage ||
+        !drawEditingState?.selectedTool
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+
+      // Check if clicking on existing element for deletion
+      if (drawEditingState.selectedTool === "eraser") {
+        const clickPoint = {
+          x: e.clientX - containerRef.current.getBoundingClientRect().left,
+          y: e.clientY - containerRef.current.getBoundingClientRect().top,
+        };
+
+        for (const element of allDrawElements) {
+          if (distanceToElement(element, clickPoint)) {
+            handleElementClick(element.id, e);
+            return;
+          }
+        }
+        return;
+      }
+
+      const elementId = generateId();
+      lastPointRef.current = coords;
+
+      let newElement = {
+        id: elementId,
+        type: drawEditingState.selectedTool,
+        color: drawEditingState.selectedColor,
+        strokeWidth: drawEditingState.strokeWidth,
+        pageNumber: pageNumber,
+        startX: coords.x,
+        startY: coords.y,
+        endX: coords.x,
+        endY: coords.y,
+        points: [coords],
+        path: "",
+        isComplete: false,
+        timestamp: Date.now(),
+      };
+
+      setCurrentElement(newElement);
+      setCurrentPath([coords]);
+      setIsDrawing(true);
+
+      // Add to parent immediately for line and arrow tools
+      if (
+        drawEditingState.selectedTool === "line" ||
+        drawEditingState.selectedTool === "arrow"
+      ) {
+        onDrawAdd?.(newElement);
+      }
+    },
+    [
+      drawEditingState?.addDrawingToPage,
+      drawEditingState?.selectedTool,
+      drawEditingState?.selectedColor,
+      drawEditingState?.strokeWidth,
+      screenToPdfCoordinates,
+      pageNumber,
+      onDrawAdd,
+      allDrawElements,
+      handleElementClick,
+    ]
+  );
+
+  // Enhanced mouse move with throttling for better performance
+  const handleMouseMove = useCallback(
+    (e) => {
+      if (!isDrawing || !currentElement) return;
+
+      // Cancel any pending animation frame
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      animationFrameRef.current = requestAnimationFrame(() => {
+        const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+
+        if (drawEditingState?.selectedTool === "brush") {
+          // Improve brush smoothness by filtering too close points
+          const lastPoint = lastPointRef.current;
+          const distance = Math.sqrt(
+            Math.pow(coords.x - lastPoint.x, 2) +
+              Math.pow(coords.y - lastPoint.y, 2)
+          );
+
+          // Only add point if it's far enough from the last point
+          if (distance > 1) {
+            const newPath = [...currentPath, coords];
+            setCurrentPath(newPath);
+            lastPointRef.current = coords;
+
+            const updatedElement = {
+              ...currentElement,
+              points: newPath,
+              endX: coords.x,
+              endY: coords.y,
+            };
+
+            setCurrentElement(updatedElement);
+          }
+        } else if (
+          drawEditingState?.selectedTool === "line" ||
+          drawEditingState?.selectedTool === "arrow"
+        ) {
+          const updatedElement = {
+            ...currentElement,
+            endX: coords.x,
+            endY: coords.y,
+          };
+
+          setCurrentElement(updatedElement);
+          onDrawUpdate?.(currentElement.id, { endX: coords.x, endY: coords.y });
+        }
+      });
+    },
+    [
+      isDrawing,
+      currentElement,
+      currentPath,
+      drawEditingState?.selectedTool,
+      screenToPdfCoordinates,
+      onDrawUpdate,
+    ]
+  );
+
+  // Enhanced mouse up handler
+  const handleMouseUp = useCallback(
+    (e) => {
+      if (!isDrawing || !currentElement) return;
+
+      // Cancel any pending animation frame
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      e.preventDefault();
+      const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+
+      const finalElement = {
+        ...currentElement,
+        endX: coords.x,
+        endY: coords.y,
+        points:
+          drawEditingState?.selectedTool === "brush"
+            ? currentPath.length > 0
+              ? currentPath
+              : [coords]
+            : [
+                { x: currentElement.startX, y: currentElement.startY },
+                { x: coords.x, y: coords.y },
+              ],
+        isComplete: true,
+      };
+
+      // Add to local state
+      setAllDrawElements((prev) => {
+        const updated = [...prev, finalElement];
+        console.log(
+          "🎨 DrawElement: Added new element, total:",
+          updated.length
+        );
+        return updated;
+      });
+
+      // Handle parent notifications
+      if (drawEditingState?.selectedTool === "brush") {
+        onDrawAdd?.(finalElement);
+      } else {
+        onDrawUpdate?.(currentElement.id, {
+          endX: coords.x,
+          endY: coords.y,
+          isComplete: true,
+          points: finalElement.points,
+        });
+      }
+
+      // Clean up
+      setIsDrawing(false);
+      setCurrentElement(null);
+      setCurrentPath([]);
+      lastPointRef.current = null;
+    },
+    [
+      isDrawing,
+      currentElement,
+      currentPath,
+      drawEditingState?.selectedTool,
+      screenToPdfCoordinates,
+      onDrawAdd,
+      onDrawUpdate,
+    ]
+  );
+
+  // Enhanced element rendering with hover effects
+  const renderDrawElement = (element, isHovered = false) => {
+    const scaledStrokeWidth = Math.max(1, (element.strokeWidth * zoom) / 100);
+    const opacity =
+      isHovered && drawEditingState?.selectedTool === "eraser" ? 0.5 : 1;
+
+    const commonProps = {
+      stroke: element.color,
+      strokeWidth: scaledStrokeWidth,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      opacity,
+      style: {
+        cursor:
+          drawEditingState?.selectedTool === "eraser" ? "pointer" : "default",
+        filter:
+          isHovered && drawEditingState?.selectedTool === "eraser"
+            ? "drop-shadow(0 0 3px rgba(255,0,0,0.5))"
+            : "none",
+      },
+      onClick: (e) => handleElementClick(element.id, e),
+      onMouseEnter: () => setHoveredElementId(element.id),
+      onMouseLeave: () => setHoveredElementId(null),
+    };
+
+    if (element.type === "line") {
+      return (
+        <line
+          key={element.id}
+          x1={(element.startX * zoom) / 100}
+          y1={(element.startY * zoom) / 100}
+          x2={(element.endX * zoom) / 100}
+          y2={(element.endY * zoom) / 100}
+          {...commonProps}
+        />
+      );
+    } else if (element.type === "arrow") {
+      const startX = (element.startX * zoom) / 100;
+      const startY = (element.startY * zoom) / 100;
+      const endX = (element.endX * zoom) / 100;
+      const endY = (element.endY * zoom) / 100;
+
+      return (
+        <g key={element.id} {...commonProps}>
+          <line
+            x1={startX}
+            y1={startY}
+            x2={endX}
+            y2={endY}
+            stroke={element.color}
+            strokeWidth={scaledStrokeWidth}
+            strokeLinecap="round"
+            opacity={opacity}
+          />
+          <path
+            d={createArrowHead(
+              startX,
+              startY,
+              endX,
+              endY,
+              scaledStrokeWidth * 3
+            )}
+            stroke={element.color}
+            strokeWidth={scaledStrokeWidth}
+            strokeLinecap="round"
+            opacity={opacity}
+          />
+        </g>
+      );
+    } else if (element.type === "brush") {
+      const scaledPoints = element.points.map((point) => ({
+        x: (point.x * zoom) / 100,
+        y: (point.y * zoom) / 100,
+      }));
+
+      return (
+        <path
+          key={element.id}
+          d={generateBrushPath(scaledPoints)}
+          fill="none"
+          {...commonProps}
+        />
+      );
+    }
+
+    return null;
+  };
+
+  // Add mouse event listeners with improved cleanup
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleContextMenu = (e) => {
+      if (drawEditingState?.addDrawingToPage) {
+        e.preventDefault();
+      }
+    };
+
+    if (drawEditingState?.addDrawingToPage) {
+      container.addEventListener("mousedown", handleMouseDown, {
+        passive: false,
+      });
+      document.addEventListener("mousemove", handleMouseMove, {
+        passive: true,
+      });
+      document.addEventListener("mouseup", handleMouseUp, { passive: false });
+      container.addEventListener("contextmenu", handleContextMenu);
+
+      return () => {
+        container.removeEventListener("mousedown", handleMouseDown);
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        container.removeEventListener("contextmenu", handleContextMenu);
+
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+      };
+    }
+  }, [
+    drawEditingState?.addDrawingToPage,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+  ]);
+
+  // Enhanced cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (isDrawing) {
+        setIsDrawing(false);
+        setCurrentElement(null);
+        setCurrentPath([]);
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [isDrawing]);
+
+  // Enhanced cursor logic
+  const getCursor = () => {
+    if (!drawEditingState?.addDrawingToPage) return "default";
+
+    switch (drawEditingState?.selectedTool) {
+      case "brush":
+        return "crosshair";
+      case "line":
+        return "crosshair";
+      case "arrow":
+        return "crosshair";
+      case "eraser":
+        return "pointer";
+      default:
+        return "default";
+    }
+  };
+
+  // Always render the drawing elements, only control interaction
+  const shouldShowInteractiveLayer =
+    drawEditingState?.showDrawToolbar || drawEditingState?.addDrawingToPage;
+
+  // ✅ DEBUG: Add console log to track state changes
+  useEffect(() => {
+    console.log(
+      `🎨 DrawElement Page ${pageNumber}: Total elements:`,
+      allDrawElements.length
+    );
+  }, [allDrawElements, pageNumber]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 pointer-events-none"
+      style={{
+        zIndex: shouldShowInteractiveLayer ? 15 : 5,
+        cursor: getCursor(),
+      }}
+    >
+      {/* Enhanced Drawing Canvas with better event handling */}
+      <svg
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full select-none"
+        style={{
+          pointerEvents: shouldShowInteractiveLayer ? "auto" : "none",
+          zIndex: 10,
+          touchAction: "none",
+        }}
+        onDragStart={(e) => e.preventDefault()}
+      >
+        {/* Always render all completed drawings */}
+        {allDrawElements.map((element) =>
+          renderDrawElement(element, element.id === hoveredElementId)
+        )}
+
+        {/* Only render current drawing preview when toolbar is active */}
+        {currentElement && shouldShowInteractiveLayer && (
+          <g className="drawing-preview" style={{ opacity: 0.8 }}>
+            {renderDrawElement(currentElement)}
+          </g>
+        )}
+      </svg>
+
+      {/* Only show tool indicator when toolbar is active */}
+      {shouldShowInteractiveLayer &&
+        drawEditingState?.selectedTool === "eraser" && (
+          <div
+            className="absolute top-4 right-4 bg-red-500 text-white px-3 py-1 rounded-lg shadow-lg text-sm font-medium pointer-events-none"
+            style={{ zIndex: 20 }}
+          >
+            🗑️ Eraser Mode - Click to delete drawings
+          </div>
+        )}
+    </div>
+  );
+};
 const Allpagespreview = memo(
   ({
     file,
@@ -1351,6 +2027,16 @@ const Allpagespreview = memo(
     onClearAllImageComplete = null,
     deleteSpecificImageElement = null,
     onDeleteSpecificImageComplete = null,
+    // Drawing editing props
+    drawEditingState = null,
+    onDrawAdd = null,
+    onDrawUpdate = null,
+    onDrawDelete = null,
+    clearAllDrawElements = false,
+    onClearAllDrawComplete = null,
+    deleteSpecificDrawElement = null,
+    onDeleteSpecificDrawComplete = null,
+    // Combined elements
     allTextElements = [],
     allImageElements = [],
     combinedElements = [],
@@ -1372,6 +2058,10 @@ const Allpagespreview = memo(
     const lastUserClickedPageRef = useRef(null);
     const [imageElements, setImageElements] = useState({});
     const [selectedImageId, setSelectedImageId] = useState(null);
+
+    // Drawing state
+    const [drawElements, setDrawElements] = useState({});
+    const [selectedDrawId, setSelectedDrawId] = useState(null);
 
     // Simplified Z-Index management state
     const [elementZIndices, setElementZIndices] = useState({});
@@ -1440,7 +2130,12 @@ const Allpagespreview = memo(
         let currentZIndex = nextZIndex;
 
         combinedElements.forEach((element) => {
-          const elementType = element.text !== undefined ? "text" : "image";
+          const elementType =
+            element.text !== undefined
+              ? "text"
+              : element.src !== undefined
+              ? "image"
+              : "draw";
           const key = `${elementType}_${element.id}`;
 
           // Only assign if not already assigned
@@ -1558,6 +2253,43 @@ const Allpagespreview = memo(
       deleteSpecificElement,
       selectedTextId,
       onDeleteSpecificComplete,
+      cleanupZIndex,
+    ]);
+
+    // Handle delete specific draw element
+    useEffect(() => {
+      if (deleteSpecificDrawElement) {
+        console.log(
+          "🗑️ Deleting specific draw element:",
+          deleteSpecificDrawElement
+        );
+
+        const { drawId, pageNumber } = deleteSpecificDrawElement;
+
+        // Remove from drawElements state
+        setDrawElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.filter((draw) => draw.id !== drawId) || [],
+        }));
+
+        // Clear selection if this element was selected
+        if (selectedDrawId === drawId) {
+          setSelectedDrawId(null);
+        }
+
+        // Clean up z-index
+        cleanupZIndex(drawId, "draw");
+
+        // Notify parent that deletion is complete
+        if (onDeleteSpecificDrawComplete) {
+          onDeleteSpecificDrawComplete();
+        }
+      }
+    }, [
+      deleteSpecificDrawElement,
+      selectedDrawId,
+      onDeleteSpecificDrawComplete,
       cleanupZIndex,
     ]);
 
@@ -1714,26 +2446,57 @@ const Allpagespreview = memo(
           });
           return updatedElements;
         });
+        setDrawElements((prevElements) => {
+          const updatedElements = { ...prevElements };
+          Object.keys(updatedElements).forEach((pageNum) => {
+            updatedElements[pageNum] = [...updatedElements[pageNum]];
+          });
+          return updatedElements;
+        });
       }
     }, [userZoom, currentZoom]);
 
-    // Additional effect to handle real-time zoom updates for selected text
+    // Additional effect to handle real-time zoom updates for selected elements
     useEffect(() => {
-      if (selectedTextId && userZoom !== currentZoom) {
-        const pageNumber = Object.keys(textElements).find((page) =>
-          textElements[page]?.some((text) => text.id === selectedTextId)
-        );
-
-        if (pageNumber) {
-          const element = textElements[pageNumber]?.find(
-            (t) => t.id === selectedTextId
+      if ((selectedTextId || selectedDrawId) && userZoom !== currentZoom) {
+        if (selectedTextId) {
+          const pageNumber = Object.keys(textElements).find((page) =>
+            textElements[page]?.some((text) => text.id === selectedTextId)
           );
-          if (element) {
-            setTextElements((prev) => ({ ...prev }));
+
+          if (pageNumber) {
+            const element = textElements[pageNumber]?.find(
+              (t) => t.id === selectedTextId
+            );
+            if (element) {
+              setTextElements((prev) => ({ ...prev }));
+            }
+          }
+        }
+
+        if (selectedDrawId) {
+          const pageNumber = Object.keys(drawElements).find((page) =>
+            drawElements[page]?.some((draw) => draw.id === selectedDrawId)
+          );
+
+          if (pageNumber) {
+            const element = drawElements[pageNumber]?.find(
+              (d) => d.id === selectedDrawId
+            );
+            if (element) {
+              setDrawElements((prev) => ({ ...prev }));
+            }
           }
         }
       }
-    }, [userZoom, currentZoom, selectedTextId, textElements]);
+    }, [
+      userZoom,
+      currentZoom,
+      selectedTextId,
+      selectedDrawId,
+      textElements,
+      drawElements,
+    ]);
 
     // PDF load handlers
     const handleLoadError = useCallback(
@@ -1776,6 +2539,7 @@ const Allpagespreview = memo(
       }));
     }, []);
 
+    // Text element handlers
     const handleTextChange = useCallback(
       (textId, pageNumber, newText) => {
         setTextElements((prev) => ({
@@ -1842,11 +2606,90 @@ const Allpagespreview = memo(
       [imageElements, onImageUpdate]
     );
 
+    // Drawing element handlers
+    const handleDrawAdd = useCallback(
+      (drawElement) => {
+        console.log("🎨 Adding draw element:", drawElement);
+
+        setDrawElements((prev) => ({
+          ...prev,
+          [drawElement.pageNumber]: [
+            ...(prev[drawElement.pageNumber] || []),
+            drawElement,
+          ],
+        }));
+
+        // Assign z-index to new drawing element
+        assignZIndexToNewElement(drawElement.id, "draw");
+
+        if (onDrawAdd) {
+          onDrawAdd(drawElement);
+        }
+      },
+      [onDrawAdd, assignZIndexToNewElement]
+    );
+
+    const handleDrawUpdate = useCallback(
+      (drawId, updates) => {
+        console.log("🎨 Updating draw element:", drawId, updates);
+
+        // Find the page containing this draw element
+        const pageNumber = Object.keys(drawElements).find((page) =>
+          drawElements[page]?.some((draw) => draw.id === drawId)
+        );
+
+        if (pageNumber) {
+          setDrawElements((prev) => ({
+            ...prev,
+            [pageNumber]:
+              prev[pageNumber]?.map((draw) =>
+                draw.id === drawId ? { ...draw, ...updates } : draw
+              ) || [],
+          }));
+
+          if (onDrawUpdate) {
+            const updatedDraw = drawElements[pageNumber]?.find(
+              (d) => d.id === drawId
+            );
+            if (updatedDraw) {
+              onDrawUpdate(drawId, { ...updatedDraw, ...updates });
+            }
+          }
+        }
+      },
+      [drawElements, onDrawUpdate]
+    );
+
+    const handleDrawDelete = useCallback(
+      (drawId, pageNumber) => {
+        console.log("🗑️ Deleting draw element:", drawId);
+
+        setDrawElements((prev) => ({
+          ...prev,
+          [pageNumber]:
+            prev[pageNumber]?.filter((draw) => draw.id !== drawId) || [],
+        }));
+
+        if (selectedDrawId === drawId) {
+          setSelectedDrawId(null);
+        }
+
+        // Clean up z-index
+        cleanupZIndex(drawId, "draw");
+
+        if (onDrawDelete) {
+          onDrawDelete(drawId, pageNumber);
+        }
+      },
+      [selectedDrawId, onDrawDelete, cleanupZIndex]
+    );
+
     // Updated text element selection handler
     const handleTextSelect = useCallback(
       (textId) => {
         setSelectedTextId(textId);
         setSelectedImageId(null); // Deselect image when selecting text
+        setSelectedDrawId(null); // Deselect draw when selecting text
 
         // Immediately bring to top
         bringElementToTop(textId, "text");
@@ -1859,9 +2702,23 @@ const Allpagespreview = memo(
       (imageId) => {
         setSelectedImageId(imageId);
         setSelectedTextId(null); // Deselect text when selecting image
+        setSelectedDrawId(null); // Deselect draw when selecting image
 
         // Immediately bring to top
         bringElementToTop(imageId, "image");
+      },
+      [bringElementToTop]
+    );
+
+    // Draw element selection handler
+    const handleDrawSelect = useCallback(
+      (drawId) => {
+        setSelectedDrawId(drawId);
+        setSelectedTextId(null); // Deselect text when selecting draw
+        setSelectedImageId(null); // Deselect image when selecting draw
+
+        // Immediately bring to top
+        bringElementToTop(drawId, "draw");
       },
       [bringElementToTop]
     );
@@ -1943,6 +2800,31 @@ const Allpagespreview = memo(
       }
     }, [clearAllTextElements, onClearAllComplete]);
 
+    // Handle clear all draw elements from parent
+    useEffect(() => {
+      if (clearAllDrawElements) {
+        console.log("🗑️ Clearing all draw elements from PDF preview");
+
+        setDrawElements({});
+        setSelectedDrawId(null);
+
+        // Clear draw z-indices
+        setElementZIndices((prev) => {
+          const newIndices = { ...prev };
+          Object.keys(newIndices).forEach((key) => {
+            if (key.startsWith("draw_")) {
+              delete newIndices[key];
+            }
+          });
+          return newIndices;
+        });
+
+        if (onClearAllDrawComplete) {
+          onClearAllDrawComplete();
+        }
+      }
+    }, [clearAllDrawElements, onClearAllDrawComplete]);
+
     // Updated text addition effect
     useEffect(() => {
       if (textEditingState?.addTextToPage && currentPage) {
@@ -1980,6 +2862,7 @@ const Allpagespreview = memo(
         assignZIndexToNewElement(textId, "text");
         setSelectedTextId(textId);
         setSelectedImageId(null);
+        setSelectedDrawId(null);
 
         if (onTextAdd) {
           onTextAdd(newTextElement);
@@ -2112,15 +2995,24 @@ const Allpagespreview = memo(
       handleTextDelete,
     ]);
 
-    // Click outside handler for both text and image elements
+    // Click outside handler for text, image, and draw elements
     useEffect(() => {
       const handleClickOutside = (e) => {
-        // Don't do anything if clicking on text or image elements or their controls
+        // Don't do anything if clicking on text, image, or draw elements or their controls
         if (
           e.target.closest(".text-element") ||
-          e.target.closest(".image-element")
+          e.target.closest(".image-element") ||
+          e.target.closest(".draw-element")
         )
           return;
+
+        // If drawing tool is active, only deselect when clicking outside PDF pages
+        if (drawEditingState?.showDrawToolbar) {
+          if (!e.target.closest("[data-page-number]")) {
+            setSelectedDrawId(null);
+          }
+          return;
+        }
 
         // If image tool is active, only deselect when clicking outside PDF pages
         if (imageEditingState?.showImageToolbar) {
@@ -2142,6 +3034,7 @@ const Allpagespreview = memo(
         if (!e.target.closest("[data-page-number]")) {
           setSelectedTextId(null);
           setSelectedImageId(null);
+          setSelectedDrawId(null);
         }
       };
 
@@ -2151,6 +3044,7 @@ const Allpagespreview = memo(
     }, [
       textEditingState?.showTextToolbar,
       imageEditingState?.showImageToolbar,
+      drawEditingState?.showDrawToolbar,
     ]);
 
     // Updated text overlay render function with real-time z-index
@@ -2265,6 +3159,37 @@ const Allpagespreview = memo(
       ]
     );
 
+    // Draw overlay render function
+    const renderDrawOverlay = useCallback(
+      (pageNumber) => {
+        return (
+          <DrawElement
+            drawEditingState={drawEditingState}
+            onDrawAdd={handleDrawAdd}
+            onDrawUpdate={handleDrawUpdate}
+            onDrawDelete={handleDrawDelete}
+            clearAllDrawElements={clearAllDrawElements}
+            onClearAllDrawComplete={onClearAllDrawComplete}
+            deleteSpecificDrawElement={deleteSpecificDrawElement}
+            onDeleteSpecificDrawComplete={onDeleteSpecificDrawComplete}
+            zoom={userZoom}
+            pageNumber={pageNumber}
+          />
+        );
+      },
+      [
+        drawEditingState,
+        handleDrawAdd,
+        handleDrawUpdate,
+        handleDrawDelete,
+        clearAllDrawElements,
+        onClearAllDrawComplete,
+        deleteSpecificDrawElement,
+        onDeleteSpecificDrawComplete,
+        userZoom,
+      ]
+    );
+
     // Updated image addition effect
     useEffect(() => {
       if (
@@ -2300,6 +3225,7 @@ const Allpagespreview = memo(
         assignZIndexToNewElement(imageId, "image");
         setSelectedImageId(imageId);
         setSelectedTextId(null);
+        setSelectedDrawId(null);
 
         if (onImageAdd) {
           onImageAdd(newImageElement);
@@ -2505,6 +3431,7 @@ const Allpagespreview = memo(
                     />
                     {renderTextOverlay(currentPage)}
                     {renderImageOverlay(currentPage)}
+                    {renderDrawOverlay(currentPage)}
                   </div>
                 </div>
               </div>
@@ -2565,6 +3492,7 @@ const Allpagespreview = memo(
                       />
                       {renderTextOverlay(leftPage)}
                       {renderImageOverlay(leftPage)}
+                      {renderDrawOverlay(leftPage)}
                     </div>
                   </div>
 
@@ -2600,6 +3528,7 @@ const Allpagespreview = memo(
                         />
                         {renderTextOverlay(rightPage)}
                         {renderImageOverlay(rightPage)}
+                        {renderDrawOverlay(rightPage)}
                       </div>
                     </div>
                   )}
@@ -2668,6 +3597,7 @@ const Allpagespreview = memo(
                         />
                         {renderTextOverlay(currentPageNumber)}
                         {renderImageOverlay(currentPageNumber)}
+                        {renderDrawOverlay(currentPageNumber)}
                       </div>
                     </div>
                   </div>
@@ -2804,6 +3734,15 @@ const Allpagespreview = memo(
               </div>
             </div>
           )}
+
+          {/* Selected draw info */}
+          {selectedDrawId && drawEditingState?.showDrawToolbar && (
+            <div className="absolute bottom-2 center-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
+              <div className="text-xs text-gray-600 font-medium">
+                Drawing selected - Use toolbar to edit
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Custom styles for resize cursors and elements */}
@@ -2869,14 +3808,24 @@ const Allpagespreview = memo(
             pointer-events: auto;
           }
 
-          /* Smooth transitions for both text and image elements */
+          .draw-element {
+            pointer-events: auto;
+          }
+
+          .draw-element * {
+            pointer-events: auto;
+          }
+
+          /* Smooth transitions for text, image, and draw elements */
           .text-element:not(.dragging),
-          .image-element:not(.dragging) {
+          .image-element:not(.dragging),
+          .draw-element:not(.dragging) {
             transition: box-shadow 0.2s ease, transform 0.1s ease;
           }
 
           .text-element:hover,
-          .image-element:hover {
+          .image-element:hover,
+          .draw-element:hover {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
           }
         `}</style>

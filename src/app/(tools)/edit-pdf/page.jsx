@@ -35,6 +35,8 @@ import FileUploaderForWatermark from "@/components/tools/FileUploaderForWatermar
 import PasswordModelPreveiw from "@/components/tools/PasswordModelPreveiw";
 import ZoomControls from "@/components/sections/EditZoomControls";
 import Allpagespreview from "@/components/sections/Allpagespreview";
+import { FaRegImage, FaShapes } from "react-icons/fa";
+import { MdOutlineEdit } from "react-icons/md";
 
 // PDF.js worker setup
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -277,9 +279,36 @@ export default function PDFViewer() {
     flipHorizontal: false,
     flipVertical: false,
   };
-
+  const initialDrawState = {
+    showDrawToolbar: false,
+    selectedTool: "brush", // brush, line, arrow
+    selectedColor: "#000000",
+    strokeWidth: 2,
+    drawings: [], // All drawings storage
+    isDrawing: false,
+    deleteRequested: false,
+    addDrawingToPage: false,
+    onDrawingAdded: null,
+  };
+  const initialShapeState = {
+    showShapeToolbar: false,
+    selectedSize: 16,
+    selectedFont: "Arial",
+    selectedColor: "#000000",
+    selectedBgColor: "transparent",
+    isBold: false,
+    isItalic: false,
+    isUnderline: false,
+    selectedAlignment: "left",
+    opacity: 1,
+    deleteRequested: false,
+    addTextToPage: false, // ✅ NEW: Flag to trigger text addition
+    onTextAdded: null, // ✅ NEW: Callback after text is added
+  };
   const [textEditingState, setTextEditingState] = useState(initialTextState);
   const [imageEditingState, setImageEditingState] = useState(initialImageState);
+  const [drawEditingState, setDrawEditingState] = useState(initialDrawState);
+  const [shapeEditingState, setShapeEditingState] = useState(initialShapeState);
   const [allTextElements, setAllTextElements] = useState([]);
   const [clearAllTextElements, setClearAllTextElements] = useState(false);
   const [deleteSpecificElement, setDeleteSpecificElement] = useState(null);
@@ -288,6 +317,16 @@ export default function PDFViewer() {
   const [clearAllImageElements, setClearAllImageElements] = useState(false);
   const [deleteSpecificImageElement, setDeleteSpecificImageElement] =
     useState(null);
+  // States for draw operations
+  const [allDrawElements, setAllDrawElements] = useState([]);
+  const [clearAllDrawElements, setClearAllDrawElements] = useState(false);
+  const [deleteSpecificDrawElement, setDeleteSpecificDrawElement] =
+    useState(null);
+  const [allShapeElements, setAllShapeElements] = useState([]);
+  const [clearAllShapeElements, setClearAllShapeElements] = useState(false);
+  const [deleteSpecificShapeElement, setDeleteSpecificShapeElement] =
+    useState(null);
+  // drag side bar
   const [draggedElement, setDraggedElement] = useState(null);
   const [dragOverElement, setDragOverElement] = useState(null);
   // Refs
@@ -662,10 +701,19 @@ export default function PDFViewer() {
   }
   // UPDATED: Toggle text editing mode - ab direct text add hoga
   const handleTextButtonClick = () => {
-    // Pehle image toolbar band karo (but image elements ko remove nahi karo)
+    // Sabse pehle sab toolbars band karo
     setImageEditingState((prev) => ({
       ...prev,
       showImageToolbar: false,
+    }));
+    setDrawEditingState((prev) => ({
+      ...prev,
+      showDrawToolbar: false,
+      addDrawingToPage: false,
+    }));
+    setShapeEditingState((prev) => ({
+      ...prev,
+      showShapeToolbar: false,
     }));
 
     // Phir text toolbar kholo
@@ -817,16 +865,23 @@ export default function PDFViewer() {
     (opt) => opt.value === textEditingState.selectedAlignment
   );
 
-  // For Text Exit
-
   // 3. Update your handleImageButtonClick function
   const handleImageButtonClick = () => {
-    // Pehle text toolbar band karo (but text elements ko remove nahi karo)
+    // Sabse pehle sab toolbars band karo
     setTextEditingState((prev) => ({
       ...prev,
       showTextToolbar: false,
       addTextToPage: false,
       onTextAdded: null,
+    }));
+    setDrawEditingState((prev) => ({
+      ...prev,
+      showDrawToolbar: false,
+      addDrawingToPage: false,
+    }));
+    setShapeEditingState((prev) => ({
+      ...prev,
+      showShapeToolbar: false,
     }));
 
     // Create a file input element
@@ -870,7 +925,6 @@ export default function PDFViewer() {
     document.body.appendChild(input);
     input.click();
   };
-
   // 4. Add image callback handlers (similar to text handlers)
   const handleImageAdd = (imageElement) => {
     console.log("Image added:", imageElement);
@@ -950,9 +1004,13 @@ export default function PDFViewer() {
       />
     );
   }
-  // Function to get combined elements with proper ordering
   const getCombinedElements = () => {
-    return [...allTextElements, ...allImageElements].sort((a, b) => {
+    return [
+      ...allTextElements,
+      ...allImageElements,
+      ...allDrawElements,
+      ...allShapeElements,
+    ].sort((a, b) => {
       // First sort by page number
       if (a.pageNumber !== b.pageNumber) {
         return a.pageNumber - b.pageNumber;
@@ -962,7 +1020,7 @@ export default function PDFViewer() {
     });
   };
 
-  // Function to reorder elements
+  // FIXED: Shape elements ko bhi reorder kiya ja raha hai
   const reorderElements = (draggedId, targetId, draggedType, targetType) => {
     const combinedElements = getCombinedElements();
     const draggedIndex = combinedElements.findIndex(
@@ -975,41 +1033,99 @@ export default function PDFViewer() {
     const draggedElement = combinedElements[draggedIndex];
     const targetElement = combinedElements[targetIndex];
 
-    // Create new order values
-    const reorderedElements = [...combinedElements];
-    reorderedElements.splice(draggedIndex, 1);
-    reorderedElements.splice(targetIndex, 0, draggedElement);
+    // Only reorder if they're on the same page
+    if (draggedElement.pageNumber !== targetElement.pageNumber) return;
 
-    // Update order values for elements on the same page
-    const pageElements = reorderedElements.filter(
+    // Create a copy of elements for the specific page
+    const pageElements = combinedElements.filter(
       (el) => el.pageNumber === draggedElement.pageNumber
     );
-    pageElements.forEach((element, index) => {
+
+    // Remove dragged element from its current position
+    const draggedPageIndex = pageElements.findIndex(
+      (el) => el.id === draggedId
+    );
+    const targetPageIndex = pageElements.findIndex((el) => el.id === targetId);
+
+    if (draggedPageIndex === -1 || targetPageIndex === -1) return;
+
+    // Create new array with reordered elements
+    const reorderedPageElements = [...pageElements];
+    const [movedElement] = reorderedPageElements.splice(draggedPageIndex, 1);
+    reorderedPageElements.splice(targetPageIndex, 0, movedElement);
+
+    // Update order values for all elements on this page
+    reorderedPageElements.forEach((element, index) => {
       element.order = index;
     });
 
-    // Separate back into text and image arrays
-    const newTextElements = reorderedElements.filter(
-      (el) => el.text !== undefined
-    );
-    const newImageElements = reorderedElements.filter(
-      (el) => el.text === undefined
-    );
+    // FIXED: Shape elements ko bhi update kiya ja raha hai
+    // Update Text Elements
+    const updatedTextElements = allTextElements.map((textEl) => {
+      if (textEl.pageNumber === draggedElement.pageNumber) {
+        const reorderedEl = reorderedPageElements.find(
+          (el) => el.id === textEl.id
+        );
+        return reorderedEl || textEl;
+      }
+      return textEl;
+    });
 
-    setAllTextElements(newTextElements);
-    setAllImageElements(newImageElements);
+    // Update Image Elements
+    const updatedImageElements = allImageElements.map((imageEl) => {
+      if (imageEl.pageNumber === draggedElement.pageNumber) {
+        const reorderedEl = reorderedPageElements.find(
+          (el) => el.id === imageEl.id
+        );
+        return reorderedEl || imageEl;
+      }
+      return imageEl;
+    });
+
+    // Update Draw Elements
+    const updatedDrawElements = allDrawElements.map((drawEl) => {
+      if (drawEl.pageNumber === draggedElement.pageNumber) {
+        const reorderedEl = reorderedPageElements.find(
+          (el) => el.id === drawEl.id
+        );
+        return reorderedEl || drawEl;
+      }
+      return drawEl;
+    });
+
+    // Update Shape Elements
+    const updatedShapeElements = allShapeElements.map((shapeEl) => {
+      if (shapeEl.pageNumber === draggedElement.pageNumber) {
+        const reorderedEl = reorderedPageElements.find(
+          (el) => el.id === shapeEl.id
+        );
+        return reorderedEl || shapeEl;
+      }
+      return shapeEl;
+    });
+
+    // Update state with reordered elements
+    setAllTextElements(updatedTextElements);
+    setAllImageElements(updatedImageElements);
+    setAllDrawElements(updatedDrawElements);
+    setAllShapeElements(updatedShapeElements); // FIXED: Shape elements bhi update ho rahe hain
   };
 
-  // Drag handlers
+  // Enhanced drag handlers with better feedback
   const handleDragStart = (e, element, elementType) => {
     setDraggedElement({ ...element, type: elementType });
     e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", ""); // For better browser support
   };
 
   const handleDragOver = (e, element, elementType) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    setDragOverElement({ ...element, type: elementType });
+
+    // Only allow drop if on same page
+    if (draggedElement && draggedElement.pageNumber === element.pageNumber) {
+      setDragOverElement({ ...element, type: elementType });
+    }
   };
 
   const handleDragLeave = (e) => {
@@ -1023,6 +1139,13 @@ export default function PDFViewer() {
     e.preventDefault();
 
     if (!draggedElement || draggedElement.id === targetElement.id) {
+      setDraggedElement(null);
+      setDragOverElement(null);
+      return;
+    }
+
+    // Only allow reordering within the same page
+    if (draggedElement.pageNumber !== targetElement.pageNumber) {
       setDraggedElement(null);
       setDragOverElement(null);
       return;
@@ -1043,6 +1166,366 @@ export default function PDFViewer() {
     setDraggedElement(null);
     setDragOverElement(null);
   };
+
+  // Function to render individual element item
+  const renderElementItem = (element, index, pageElements) => {
+    // Element type detection
+    const isText = element.text !== undefined;
+    const isImage =
+      element.src !== undefined &&
+      element.text === undefined &&
+      element.type === undefined;
+    const isDraw = element.type !== undefined;
+
+    const isDragging = draggedElement?.id === element.id;
+    const isDragOver = dragOverElement?.id === element.id;
+    const canDrop =
+      draggedElement && draggedElement.pageNumber === element.pageNumber;
+
+    return (
+      <div
+        key={element.id}
+        draggable
+        onDragStart={(e) =>
+          handleDragStart(
+            e,
+            element,
+            isText ? "text" : isDraw ? "draw" : "image"
+          )
+        }
+        onDragOver={(e) =>
+          handleDragOver(
+            e,
+            element,
+            isText ? "text" : isDraw ? "draw" : "image"
+          )
+        }
+        onDragLeave={handleDragLeave}
+        onDrop={(e) =>
+          handleDrop(e, element, isText ? "text" : isDraw ? "draw" : "image")
+        }
+        onDragEnd={handleDragEnd}
+        className={`flex items-center justify-between p-3 rounded-lg transition-all group mb-2 cursor-move relative
+          ${
+            isText
+              ? "bg-gray-50 hover:bg-gray-100"
+              : isDraw
+              ? "bg-red-50 hover:bg-red-100"
+              : "bg-red-50 hover:bg-red-100"
+          }
+          ${isDragging ? "opacity-50 scale-95 z-10" : ""}
+          ${
+            isDragOver && canDrop
+              ? "ring-2 ring-red-400 bg-red-100 transform scale-[1.02]"
+              : ""
+          }
+          ${
+            draggedElement &&
+            !canDrop &&
+            draggedElement.pageNumber !== element.pageNumber
+              ? "opacity-60"
+              : ""
+          }
+        `}
+      >
+        {/* Visual drop indicator */}
+        {isDragOver && canDrop && (
+          <div className="absolute inset-0 border-2 border-dashed border-red-400 rounded-lg bg-red-100/50 pointer-events-none" />
+        )}
+
+        {/* Order indicator */}
+        <div className="absolute -left-2 -top-2 w-6 h-6 bg-gray-600 text-white text-xs rounded-full flex items-center justify-center font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+          {(element.order || 0) + 1}
+        </div>
+
+        {/* Drag Handle & Element Info */}
+        <div className="flex items-center gap-3 flex-1">
+          <div className="cursor-grab hover:cursor-grabbing text-gray-400 hover:text-gray-600">
+            <GripVertical className="w-4 h-4" />
+          </div>
+
+          {/* Element Icon */}
+          <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
+            {isText ? (
+              <Type className="w-4 h-4" />
+            ) : isDraw ? (
+              element.type === "brush" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08-2 2.5-4 4-4z"
+                  />
+                </svg>
+              ) : element.type === "line" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7 17L17 7"
+                  />
+                </svg>
+              ) : element.type === "arrow" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7 17L17 7"
+                  />
+                  <polyline
+                    points="7,7 17,7 17,17"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                  />
+                </svg>
+              ) : (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                  />
+                </svg>
+              )
+            ) : element.src ? (
+              <img
+                src={element.src}
+                alt="Preview"
+                className="w-full h-full object-cover rounded"
+              />
+            ) : (
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path
+                  fillRule="evenodd"
+                  d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            )}
+          </div>
+
+          {/* Element Details */}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900">
+              {isText
+                ? (() => {
+                    const text = element.text || `New Text ${index + 1}`;
+                    return text.length > 20
+                      ? text.substring(0, 20) + "..."
+                      : text;
+                  })()
+                : isDraw
+                ? `${
+                    element.type?.charAt(0).toUpperCase() +
+                      element.type?.slice(1) || "Drawing"
+                  } ${index + 1}`
+                : `Image ${index + 1}`}
+            </p>
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              {isText ? (
+                <>
+                  <span>{element.fontFamily}</span>
+                  <span>•</span>
+                  <span>{element.fontSize}px</span>
+                </>
+              ) : isDraw ? (
+                <>
+                  <div
+                    className="w-3 h-3 rounded-full border border-gray-300"
+                    style={{ backgroundColor: element.color || "#000000" }}
+                  />
+                  <span>{element.color || "#000000"}</span>
+                  <span>•</span>
+                  <span>{element.strokeWidth || 2}px stroke</span>
+                </>
+              ) : (
+                <>
+                  <span>
+                    {Math.round(element.width)}×{Math.round(element.height)}
+                  </span>
+                  <span>•</span>
+                  <span>{element.opacity}% opacity</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              // Navigate to page and select element
+              if (window.markThumbnailClick) {
+                window.markThumbnailClick(parseInt(element.pageNumber));
+              }
+            }}
+            className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+            title={`Edit ${isText ? "text" : isDraw ? "drawing" : "image"}`}
+          >
+            <Edit className="w-4 h-4" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+
+              if (isText) {
+                // Delete text element
+                setAllTextElements((prev) =>
+                  prev.filter((t) => t.id !== element.id)
+                );
+                setDeleteSpecificElement({
+                  textId: element.id,
+                  pageNumber: element.pageNumber,
+                });
+              } else if (isDraw) {
+                // Delete draw element
+                setAllDrawElements((prev) =>
+                  prev.filter((draw) => draw.id !== element.id)
+                );
+                setDeleteSpecificDrawElement({
+                  drawId: element.id,
+                  pageNumber: element.pageNumber,
+                });
+              } else {
+                // Delete image element
+                setAllImageElements((prev) =>
+                  prev.filter((img) => img.id !== element.id)
+                );
+                setDeleteSpecificImageElement({
+                  imageId: element.id,
+                  pageNumber: element.pageNumber,
+                });
+              }
+            }}
+            className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+            title={`Delete ${isText ? "text" : isDraw ? "drawing" : "image"}`}
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+  // Draw Button Handler
+  const handleDrawButtonClick = () => {
+    // Sabse pehle sab toolbars band karo
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+      addTextToPage: false,
+      onTextAdded: null,
+    }));
+    setImageEditingState((prev) => ({
+      ...prev,
+      showImageToolbar: false,
+    }));
+    setShapeEditingState((prev) => ({
+      ...prev,
+      showShapeToolbar: false,
+    }));
+
+    // Phir draw toolbar kholo AUR line tool select karo
+    setDrawEditingState((prev) => ({
+      ...prev,
+      showDrawToolbar: true,
+      selectedTool: "line", // Default line tool select kar do
+      addDrawingToPage: true, // Drawing mode activate kar do
+    }));
+  };
+  const handleDrawAdd = (drawElement) => {
+    console.log("Draw added:", drawElement);
+    setAllDrawElements((prev) => [...prev, drawElement]);
+  };
+  const handleDrawUpdate = (drawingId, updates) => {
+    setAllDrawElements((prev) =>
+      prev.map((drawing) =>
+        drawing.id === drawingId ? { ...drawing, ...updates } : drawing
+      )
+    );
+  };
+  const handleDrawDelete = (drawingId) => {
+    setAllDrawElements((prev) =>
+      prev.filter((drawing) => drawing.id !== drawingId)
+    );
+  };
+  // Shape Button Handler
+  const handleShapeButtonClick = () => {
+    // Sabse pehle sab toolbars band karo
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+      addTextToPage: false,
+      onTextAdded: null,
+    }));
+    setImageEditingState((prev) => ({
+      ...prev,
+      showImageToolbar: false,
+    }));
+    setDrawEditingState((prev) => ({
+      ...prev,
+      showDrawToolbar: false,
+      addDrawingToPage: false, // Drawing mode bhi band kar do
+    }));
+
+    // Phir Shape toolbar kholo
+    setShapeEditingState((prev) => ({
+      ...prev,
+      showShapeToolbar: true,
+    }));
+  };
+
+  const handleShapeAdd = (ShapeElement) => {
+    console.log("Shape added:", ShapeElement);
+    setAllShapeElements((prev) => [...prev, ShapeElement]);
+  };
+
+  const handleShapeUpdate = (ShapeingId, updates) => {
+    setAllShapeElements((prev) =>
+      prev.map((Shapeing) =>
+        Shapeing.id === ShapeingId ? { ...Shapeing, ...updates } : Shapeing
+      )
+    );
+  };
+
+  const handleShapeDelete = (ShapeingId) => {
+    setAllShapeElements((prev) =>
+      prev.filter((Shapeing) => Shapeing.id !== ShapeingId)
+    );
+  };
+
   return (
     <div className="md:h-[calc(100vh-82px)]">
       <div className="grid grid-cols-1 md:grid-cols-12 border h-full">
@@ -1123,37 +1606,27 @@ export default function PDFViewer() {
                 }`}
                 onClick={handleImageButtonClick}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" height="16" width="20">
-                  <path
-                    fill="#707078"
-                    fillRule="evenodd"
-                    d="M17.298 16c1.8 0 2.702-.923 2.702-2.732V2.723C20 .923 19.087 0 17.298 0H2.702C.913 0 0 .914 0 2.723v10.545C0 15.077.913 16 2.702 16h14.595zm-15.82-3.746v-9.43c0-.877.456-1.316 1.28-1.316h14.488c.814 0 1.28.44 1.28 1.316v9.393l-4.43-4.25c-.376-.338-.814-.52-1.27-.52a1.8 1.8 0 0 0-1.271.512l-3.82 3.49-1.566-1.444c-.358-.33-.752-.493-1.145-.493-.385 0-.743.155-1.092.484l-2.452 2.257zM8.403 6.05c0 1.133-.904 2.047-2.004 2.047-1.1 0-2.004-.914-2.004-2.047 0-1.124.895-2.056 2.004-2.056 1.1 0 2.004.932 2.004 2.056z"
-                  ></path>
-                </svg>
+                <FaRegImage className="w-5 h-5" />
               </button>
-              <button className="p-2 rounded hover:bg-gray-100 transition-colors">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  height="15.999"
-                  width="15.999"
-                  fill="#707078"
-                  fillRule="evenodd"
-                >
-                  <path d="M1.53 11.443l9.382-9.383 3.026 3.026-9.382 9.383-3.026-3.026zM0 16l3.344-.926-2.418-2.418L0 16zM14.776.47a1.61 1.61 0 0 0-2.272 0l-.68.68 3.026 3.026.68-.68a1.61 1.61 0 0 0 0-2.272L14.776.47z"></path>
-                </svg>
+              <button
+                className={`p-3 rounded-lg transition-all duration-200 ${
+                  drawEditingState.showDrawToolbar
+                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                    : "hover:bg-red-100 text-gray-700"
+                }`}
+                onClick={handleDrawButtonClick}
+              >
+                <MdOutlineEdit className="w-5 h-5" />
               </button>
-              <button className="p-2 rounded hover:bg-gray-100 transition-colors">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24.001"
-                  height="24"
-                  fill="#707078"
-                  fillRule="evenodd"
-                >
-                  <path d="M13.716 10.286v4.286h5.534l.182.613c.188.63.284 1.29.284 1.96A6.86 6.86 0 0 1 12.858 24a6.86 6.86 0 0 1-6.857-6.857 6.86 6.86 0 0 1 6.857-6.857h.857zm-.857 4.418v-3.56a6 6 0 0 0 0 12 6 6 0 0 0 5.752-7.714h-5.026c-.4 0-.725-.325-.725-.725z"></path>
-                  <path d="M.12 14.134L8.264.42a.86.86 0 0 1 1.474 0l3.857 6.497c.08.132.12.283.12.437v2.93c0 .474-.384.857-.857.857l-.23.004c-2.372.1-4.453 1.568-5.334 3.746-.13.324-.445.536-.794.536H.858a.86.86 0 0 1-.737-1.295zm12.737-6.78L9 .857.858 14.57H6.5a6.86 6.86 0 0 1 6.359-4.286v-2.93z"></path>
-                  <path d="M23.144 4.286h-9.43c-.473 0-.857.384-.857.857v9.43c0 .473.384.857.857.857h9.43c.473 0 .857-.384.857-.857v-9.43c0-.473-.384-.857-.857-.857z"></path>
-                </svg>
+              <button
+                className={`p-3 rounded-lg transition-all duration-200 ${
+                  shapeEditingState.showShapeToolbar
+                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                    : "hover:bg-red-100 text-gray-700"
+                }`}
+                onClick={handleShapeButtonClick}
+              >
+                <FaShapes className="w-5 h-5" />
               </button>
             </div>
             {textEditingState.showTextToolbar && (
@@ -1166,7 +1639,7 @@ export default function PDFViewer() {
                   <select
                     value={textEditingState.selectedFont}
                     onChange={(e) => handleFontChange(e.target.value)}
-                    className="appearance-none bg-white border border-gray-300 rounded px-2 py-1 pr-6 text-xs focus:outline-none focus:border-blue-500 w-full"
+                    className="appearance-none bg-white border border-gray-300 rounded px-2 py-1 pr-6 text-xs focus:outline-none focus:border-red-500 w-full"
                   >
                     {fontOptions.map((font) => (
                       <option key={font} value={font}>
@@ -1183,7 +1656,7 @@ export default function PDFViewer() {
                   <select
                     value={textEditingState.selectedSize}
                     onChange={(e) => handleSizeChange(e.target.value)}
-                    className="appearance-none bg-white border border-gray-300 rounded px-3 py-1 pr-8 text-sm focus:outline-none focus:border-blue-500 w-16"
+                    className="appearance-none bg-white border border-gray-300 rounded px-3 py-1 pr-8 text-sm focus:outline-none focus:border-red-500 w-16"
                   >
                     {sizeOptions.map((size) => (
                       <option key={size} value={size}>
@@ -1201,7 +1674,7 @@ export default function PDFViewer() {
                   onClick={handleBold}
                   className={`p-2 rounded transition-colors ${
                     textEditingState.isBold
-                      ? "bg-blue-100 text-blue-600"
+                      ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
                 >
@@ -1212,7 +1685,7 @@ export default function PDFViewer() {
                   onClick={handleItalic}
                   className={`p-2 rounded transition-colors ${
                     textEditingState.isItalic
-                      ? "bg-blue-100 text-blue-600"
+                      ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
                 >
@@ -1223,7 +1696,7 @@ export default function PDFViewer() {
                   onClick={handleUnderline}
                   className={`p-2 rounded transition-colors ${
                     textEditingState.isUnderline
-                      ? "bg-blue-100 text-blue-600"
+                      ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
                 >
@@ -1309,7 +1782,7 @@ export default function PDFViewer() {
                           onClick={() => handleAlignment(opt.value)}
                           className={`w-full flex items-center gap-2 p-1 text-sm hover:bg-gray-100 ${
                             textEditingState.selectedAlignment === opt.value
-                              ? "bg-blue-100 text-blue-600"
+                              ? "bg-red-100 text-red-600"
                               : ""
                           }`}
                         >
@@ -1382,7 +1855,7 @@ export default function PDFViewer() {
                           onClick={() => handleImageOpacityChange(option)}
                           className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${
                             imageEditingState.opacity === option
-                              ? "bg-blue-50 text-blue-600"
+                              ? "bg-red-50 text-red-600"
                               : "text-gray-700"
                           }`}
                         >
@@ -1422,7 +1895,7 @@ export default function PDFViewer() {
                   onClick={handleImageFlipHorizontal}
                   className={`p-2 hover:bg-gray-200 rounded ${
                     imageEditingState.flipHorizontal
-                      ? "bg-blue-100 text-blue-600"
+                      ? "bg-red-100 text-red-600"
                       : ""
                   }`}
                   title="Flip Horizontal"
@@ -1435,7 +1908,7 @@ export default function PDFViewer() {
                   onClick={handleImageFlipVertical}
                   className={`p-2 hover:bg-gray-200 rounded ${
                     imageEditingState.flipVertical
-                      ? "bg-blue-100 text-blue-600"
+                      ? "bg-red-100 text-red-600"
                       : ""
                   }`}
                   title="Flip Vertical"
@@ -1454,6 +1927,213 @@ export default function PDFViewer() {
                 >
                   <Trash2 size={16} />
                 </button>
+              </div>
+            )}
+            {drawEditingState.showDrawToolbar && (
+              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
+                {/* Line Tool - FIRST */}
+
+                {/* Color Picker */}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="color"
+                    className="w-8 h-8 border-2 border-gray-300 rounded cursor-pointer bg-white"
+                    value={drawEditingState.selectedColor}
+                    onChange={(e) =>
+                      setDrawEditingState((prev) => ({
+                        ...prev,
+                        selectedColor: e.target.value,
+                      }))
+                    }
+                    title="Color"
+                  />
+                </div>
+
+                {/* Stroke Width Input with Lines Icon */}
+                <div className="flex items-center gap-1">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1"
+                  >
+                    <line x1="3" y1="6" x2="21" y2="6" strokeWidth="1" />
+                    <line x1="3" y1="12" x2="21" y2="12" strokeWidth="2" />
+                    <line x1="3" y1="18" x2="21" y2="18" strokeWidth="3" />
+                  </svg>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    className="w-12 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-red-600 focus:border-red-600 bg-white text-black"
+                    value={drawEditingState.strokeWidth}
+                    onChange={(e) =>
+                      setDrawEditingState((prev) => ({
+                        ...prev,
+                        strokeWidth: parseInt(e.target.value) || 2,
+                      }))
+                    }
+                    title="Stroke Width"
+                  />
+                  <span className="text-xs text-gray-600">pt</span>
+                </div>
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "line"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "line",
+                      addDrawingToPage: true,
+                    }))
+                  }
+                  title="Line"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <line x1="7" y1="17" x2="17" y2="7" />
+                  </svg>
+                </button>
+                {/* Brush Tool */}
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "brush"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "brush",
+                      addDrawingToPage: true,
+                    }))
+                  }
+                  title="Brush"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" />
+                    <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08-2 2.5-4 4-4z" />
+                  </svg>
+                </button>
+
+                {/* Arrow Tool */}
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "arrow"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "arrow",
+                      addDrawingToPage: true,
+                    }))
+                  }
+                  title="Arrow"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <line x1="7" y1="17" x2="17" y2="7" />
+                    <polyline points="7,7 17,7 17,17" />
+                  </svg>
+                </button>
+
+                {/* Undo */}
+                <button
+                  className="p-2 rounded hover:bg-gray-200 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+
+                    // Only proceed if there are elements to undo
+                    if (allDrawElements.length > 0) {
+                      const lastElement =
+                        allDrawElements[allDrawElements.length - 1];
+
+                      // Remove the last element
+                      setAllDrawElements((prev) => prev.slice(0, -1));
+
+                      // Handle the deletion logic for the last element
+                      handleDrawDelete(lastElement.id);
+                      setDeleteSpecificDrawElement({
+                        drawId: lastElement.id,
+                        pageNumber: lastElement.pageNumber,
+                      });
+                    }
+                  }}
+                  title="Undo"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M3 7v6h6" />
+                    <path d="m21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
+                  </svg>
+                </button>
+
+                {/* Delete/Clear All */}
+                <button
+                  className="p-2 rounded hover:bg-red-100 hover:text-red-600 transition-colors"
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      showDrawToolbar: false,
+                      addDrawingToPage: false,
+                      selectedTool: "line", // Reset to default
+                    }))
+                  }
+                  title="Clear All Drawings"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <polyline points="3,6 5,6 21,6" />
+                    <path d="m19,6v14a2,2 0 01-2,2H7a2,2 0 01-2-2V6m3,0V4a2,2 0 012-2h4a2,2 0 012,2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+
+                {/* Close Toolbar */}
+              </div>
+            )}
+            {shapeEditingState.showShapeToolbar && (
+              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
+                Hello
               </div>
             )}
           </div>
@@ -1521,9 +2201,24 @@ export default function PDFViewer() {
                           onDeleteSpecificImageComplete={() =>
                             setDeleteSpecificImageElement(null)
                           }
+                          // Draw editing props ✅ NEW
+                          drawEditingState={drawEditingState}
+                          onDrawAdd={handleDrawAdd}
+                          onDrawUpdate={handleDrawUpdate}
+                          onDrawDelete={handleDrawDelete}
+                          clearAllDrawElements={clearAllDrawElements}
+                          onClearAllDrawComplete={() =>
+                            setClearAllDrawElements(false)
+                          }
+                          deleteSpecificDrawElement={deleteSpecificDrawElement}
+                          onDeleteSpecificDrawComplete={() =>
+                            setDeleteSpecificDrawElement(null)
+                          }
+                          // Combined elements for easier management
                           combinedElements={getCombinedElements()}
                           allTextElements={allTextElements}
                           allImageElements={allImageElements}
+                          allDrawElements={allDrawElements} // ✅ NEW
                         />
                       </div>
                     </div>
@@ -1567,15 +2262,19 @@ export default function PDFViewer() {
             {/* Content Area */}
             <div className="flex-1 p-4">
               {/* Remove All Button */}
-              {(allTextElements.length > 0 || allImageElements.length > 0) && (
+              {(allTextElements.length > 0 ||
+                allImageElements.length > 0 ||
+                allDrawElements.length > 0) && (
                 <div className="flex justify-end mb-4">
                   <button
                     onClick={() => {
                       // Clear all elements
                       setAllTextElements([]);
                       setAllImageElements([]);
+                      setAllDrawElements([]);
                       setClearAllTextElements(true);
                       setClearAllImageElements(true);
+                      setClearAllDrawElements(true);
                       console.log("Removing all elements");
                     }}
                     className="text-red-500 hover:text-red-600 text-sm font-medium transition-colors"
@@ -1584,15 +2283,18 @@ export default function PDFViewer() {
                   </button>
                 </div>
               )}
+
               {/* Elements by Page */}
-              {allTextElements.length === 0 && allImageElements.length === 0 ? (
+              {allTextElements.length === 0 &&
+              allImageElements.length === 0 &&
+              allDrawElements.length === 0 ? (
                 <div className="text-center bg-red-50 border-2 border-dashed border-red-200 p-8 rounded-lg text-red-600 mt-8 transition-colors hover:bg-red-100 hover:border-red-300">
                   <Type className="w-16 h-16 mx-auto mb-4 text-red-400" />
                   <h3 className="text-lg font-semibold text-red-700 mb-2">
                     No elements added
                   </h3>
                   <p className="text-red-500 mb-4">
-                    Get started by adding text or images to your PDF
+                    Get started by adding text, images, or drawings to your PDF
                   </p>
                 </div>
               ) : (
@@ -1623,171 +2325,9 @@ export default function PDFViewer() {
                         {/* Ordered Elements */}
                         {pageElements
                           .sort((a, b) => (a.order || 0) - (b.order || 0))
-                          .map((element, index) => {
-                            const isText = element.text !== undefined;
-                            const isDragging =
-                              draggedElement?.id === element.id;
-                            const isDragOver =
-                              dragOverElement?.id === element.id;
-
-                            return (
-                              <div
-                                key={element.id}
-                                draggable
-                                onDragStart={(e) =>
-                                  handleDragStart(
-                                    e,
-                                    element,
-                                    isText ? "text" : "image"
-                                  )
-                                }
-                                onDragOver={(e) =>
-                                  handleDragOver(
-                                    e,
-                                    element,
-                                    isText ? "text" : "image"
-                                  )
-                                }
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) =>
-                                  handleDrop(
-                                    e,
-                                    element,
-                                    isText ? "text" : "image"
-                                  )
-                                }
-                                onDragEnd={handleDragEnd}
-                                className={`flex items-center justify-between p-3 rounded-lg transition-all group mb-2 cursor-move
-                                ${
-                                  isText
-                                    ? "bg-gray-50 hover:bg-gray-100"
-                                    : "bg-blue-50 hover:bg-blue-100"
-                                }
-                                ${isDragging ? "opacity-50 scale-95" : ""}
-                                ${
-                                  isDragOver
-                                    ? "ring-2 ring-blue-400 bg-blue-100"
-                                    : ""
-                                }
-                              `}
-                              >
-                                {/* Drag Handle */}
-                                <div className="flex items-center gap-3 flex-1">
-                                  <div className="cursor-grab hover:cursor-grabbing text-gray-400 hover:text-gray-600">
-                                    <GripVertical className="w-4 h-4" />
-                                  </div>
-
-                                  <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
-                                    {isText ? (
-                                      <Type className="w-4 h-4" />
-                                    ) : element.src ? (
-                                      <img
-                                        src={element.src}
-                                        alt="Preview"
-                                        className="w-full h-full object-cover rounded"
-                                      />
-                                    ) : (
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 20 20"
-                                      >
-                                        <path
-                                          fillRule="evenodd"
-                                          d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"
-                                          clipRule="evenodd"
-                                        />
-                                      </svg>
-                                    )}
-                                  </div>
-
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-gray-900">
-                                      {isText
-                                        ? (() => {
-                                            const text =
-                                              element.text ||
-                                              `New Text ${index + 1}`;
-                                            return text.length > 20
-                                              ? text.substring(0, 20) + "..."
-                                              : text;
-                                          })()
-                                        : `Image ${index + 1}`}
-                                    </p>
-                                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                                      {isText ? (
-                                        <>
-                                          <span>{element.fontFamily}</span>
-                                          <span>•</span>
-                                          <span>{element.fontSize}px</span>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <span>
-                                            {Math.round(element.width)}×
-                                            {Math.round(element.height)}
-                                          </span>
-                                          <span>•</span>
-                                          <span>
-                                            {element.opacity}% opacity
-                                          </span>
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Action Buttons */}
-                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      // handleThumbnailClick(parseInt(pageNumber));
-                                    }}
-                                    className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                    title={`Edit ${isText ? "text" : "image"}`}
-                                  >
-                                    <Edit className="w-4 h-4" />
-                                  </button>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-
-                                      if (isText) {
-                                        // Delete text element
-                                        setAllTextElements((prev) =>
-                                          prev.filter(
-                                            (t) => t.id !== element.id
-                                          )
-                                        );
-                                        setDeleteSpecificElement({
-                                          textId: element.id,
-                                          pageNumber: element.pageNumber,
-                                        });
-                                      } else {
-                                        // Delete image element
-                                        setAllImageElements((prev) =>
-                                          prev.filter(
-                                            (img) => img.id !== element.id
-                                          )
-                                        );
-                                        setDeleteSpecificImageElement({
-                                          imageId: element.id,
-                                          pageNumber: element.pageNumber,
-                                        });
-                                      }
-                                    }}
-                                    className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                    title={`Delete ${
-                                      isText ? "text" : "image"
-                                    }`}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
+                          .map((element, index) =>
+                            renderElementItem(element, index, pageElements)
+                          )}
                       </div>
                     ))}
                 </div>
@@ -1795,7 +2335,9 @@ export default function PDFViewer() {
             </div>
 
             {/* Footer Action Button */}
-            {allTextElements.length > 0 && (
+            {(allTextElements.length > 0 ||
+              allImageElements.length > 0 ||
+              allDrawElements.length > 0) && (
               <div className="border-t border-gray-100 p-4">
                 <button className="w-full bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
                   <span>Edit PDF</span>
