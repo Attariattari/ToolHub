@@ -7,7 +7,7 @@ import React, {
   useCallback,
 } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
-import { FileText, X, ChevronUp, Edit, Type } from "lucide-react";
+import { FileText } from "lucide-react";
 import { IoMdLock } from "react-icons/io";
 
 // Updated ResizableTextElement with proper font size handling and textarea focus
@@ -1320,7 +1320,7 @@ const ResizableImageElement = ({
     </>
   );
 };
-// Fixed DrawElement Component
+// Enhanced DrawElement Component with Resizable Controls
 const DrawElement = ({
   drawEditingState,
   onDrawAdd,
@@ -1338,7 +1338,21 @@ const DrawElement = ({
   const [currentElement, setCurrentElement] = useState(null);
   const [allDrawElements, setAllDrawElements] = useState([]);
   const [hoveredElementId, setHoveredElementId] = useState(null);
-  const [isDeleteMode, setIsDeleteMode] = useState(false);
+  const [selectedElementId, setSelectedElementId] = useState(null);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [resizeStart, setResizeStart] = useState({
+    x: 0,
+    y: 0,
+    startX: 0,
+    startY: 0,
+    endX: 0,
+    endY: 0,
+    elementX: 0,
+    elementY: 0,
+  });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [currentResizeHandle, setCurrentResizeHandle] = useState(null);
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -1350,11 +1364,12 @@ const DrawElement = ({
   useEffect(() => {
     if (clearAllDrawElements) {
       setAllDrawElements([]);
+      setSelectedElementId(null);
       onClearAllDrawComplete?.();
     }
   }, [clearAllDrawElements, onClearAllDrawComplete]);
 
-  // ✅ FIXED: Delete specific element when parent requests
+  // Delete specific element when parent requests
   useEffect(() => {
     if (deleteSpecificDrawElement) {
       console.log(
@@ -1362,13 +1377,11 @@ const DrawElement = ({
         deleteSpecificDrawElement
       );
 
-      // Check if it's object with drawId and pageNumber or just the ID
       const drawIdToDelete =
         deleteSpecificDrawElement.drawId || deleteSpecificDrawElement;
       const elementPageNumber =
         deleteSpecificDrawElement.pageNumber || pageNumber;
 
-      // Only delete if it's for this page
       if (elementPageNumber === pageNumber) {
         setAllDrawElements((prev) => {
           const filtered = prev.filter(
@@ -1380,11 +1393,20 @@ const DrawElement = ({
           );
           return filtered;
         });
+
+        if (selectedElementId === drawIdToDelete) {
+          setSelectedElementId(null);
+        }
       }
 
       onDeleteSpecificDrawComplete?.();
     }
-  }, [deleteSpecificDrawElement, onDeleteSpecificDrawComplete, pageNumber]);
+  }, [
+    deleteSpecificDrawElement,
+    onDeleteSpecificDrawComplete,
+    pageNumber,
+    selectedElementId,
+  ]);
 
   // Enhanced coordinate conversion with better precision
   const getPageBoundaries = useCallback(() => {
@@ -1458,7 +1480,6 @@ const DrawElement = ({
       const current = points[i];
       const next = points[i + 1];
 
-      // Apply simple smoothing
       const smoothedPoint = {
         x: (prev.x + current.x + next.x) / 3,
         y: (prev.y + current.y + next.y) / 3,
@@ -1475,7 +1496,6 @@ const DrawElement = ({
   const generateBrushPath = (points, smooth = true) => {
     if (points.length < 1) return "";
     if (points.length === 1) {
-      // Single point - draw a small circle
       return `M ${points[0].x} ${points[0].y} A 0.5 0.5 0 1 1 ${
         points[0].x + 0.1
       } ${points[0].y}`;
@@ -1487,7 +1507,6 @@ const DrawElement = ({
     if (processedPoints.length === 2) {
       path += ` L ${processedPoints[1].x} ${processedPoints[1].y}`;
     } else {
-      // Use quadratic bezier curves for smoother lines
       for (let i = 1; i < processedPoints.length - 1; i++) {
         const current = processedPoints[i];
         const next = processedPoints[i + 1];
@@ -1497,7 +1516,6 @@ const DrawElement = ({
         path += ` Q ${current.x} ${current.y} ${midX} ${midY}`;
       }
 
-      // Add the last point
       const lastPoint = processedPoints[processedPoints.length - 1];
       path += ` T ${lastPoint.x} ${lastPoint.y}`;
     }
@@ -1505,12 +1523,11 @@ const DrawElement = ({
     return path;
   };
 
-  // Distance calculation for point-to-line proximity
+  // Distance calculation for point-to-element proximity
   const distanceToElement = (element, point) => {
-    const threshold = 10; // pixels
+    const threshold = 15; // pixels
 
     if (element.type === "brush") {
-      // For brush strokes, check distance to any point in the path
       return element.points.some((p) => {
         const scaledP = { x: (p.x * zoom) / 100, y: (p.y * zoom) / 100 };
         const distance = Math.sqrt(
@@ -1519,7 +1536,6 @@ const DrawElement = ({
         return distance <= threshold;
       });
     } else if (element.type === "line" || element.type === "arrow") {
-      // For lines/arrows, calculate distance to line segment
       const startX = (element.startX * zoom) / 100;
       const startY = (element.startY * zoom) / 100;
       const endX = (element.endX * zoom) / 100;
@@ -1544,21 +1560,102 @@ const DrawElement = ({
       );
 
       return distance <= threshold;
+    } else if (
+      element.type === "square" ||
+      element.type === "circle" ||
+      element.type === "triangle"
+    ) {
+      // For shapes, check if point is within the bounding box
+      const minX = Math.min(
+        (element.startX * zoom) / 100,
+        (element.endX * zoom) / 100
+      );
+      const maxX = Math.max(
+        (element.startX * zoom) / 100,
+        (element.endX * zoom) / 100
+      );
+      const minY = Math.min(
+        (element.startY * zoom) / 100,
+        (element.endY * zoom) / 100
+      );
+      const maxY = Math.max(
+        (element.startY * zoom) / 100,
+        (element.endY * zoom) / 100
+      );
+
+      return (
+        point.x >= minX - threshold &&
+        point.x <= maxX + threshold &&
+        point.y >= minY - threshold &&
+        point.y <= maxY + threshold
+      );
+    } else if (element.type === "emoji") {
+      // For emojis, check distance from center point
+      const centerX = (element.x * zoom) / 100;
+      const centerY = (element.y * zoom) / 100;
+      const distance = Math.sqrt(
+        Math.pow(point.x - centerX, 2) + Math.pow(point.y - centerY, 2)
+      );
+      return distance <= threshold * 2; // Larger threshold for emojis
     }
 
     return false;
   };
 
-  // ✅ FIXED: Handle element deletion with better state management
-  const handleElementClick = useCallback(
-    (elementId, event) => {
-      if (drawEditingState?.selectedTool === "eraser" || isDeleteMode) {
+  // Get element bounds for resize handles
+  const getElementBounds = (element) => {
+    if (element.type === "emoji") {
+      const size = ((element.size || element.strokeWidth * 2) * zoom) / 100;
+      return {
+        left: (element.x * zoom) / 100 - size / 2,
+        top: (element.y * zoom) / 100 - size / 2,
+        right: (element.x * zoom) / 100 + size / 2,
+        bottom: (element.y * zoom) / 100 + size / 2,
+        width: size,
+        height: size,
+      };
+    } else {
+      // For line, arrow, and shapes
+      const minX = Math.min(
+        (element.startX * zoom) / 100,
+        (element.endX * zoom) / 100
+      );
+      const maxX = Math.max(
+        (element.startX * zoom) / 100,
+        (element.endX * zoom) / 100
+      );
+      const minY = Math.min(
+        (element.startY * zoom) / 100,
+        (element.endY * zoom) / 100
+      );
+      const maxY = Math.max(
+        (element.startY * zoom) / 100,
+        (element.endY * zoom) / 100
+      );
+
+      return {
+        left: minX,
+        top: minY,
+        right: maxX,
+        bottom: maxY,
+        width: maxX - minX,
+        height: maxY - minY,
+      };
+    }
+  };
+
+  // Handle element selection and manipulation
+  const handleElementInteraction = useCallback(
+    (elementId, event, action = "select") => {
+      const element = allDrawElements.find((el) => el.id === elementId);
+      if (!element) return;
+
+      if (action === "delete" && drawEditingState?.selectedTool === "eraser") {
         event.preventDefault();
         event.stopPropagation();
 
         console.log("🗑️ DrawElement: Local delete of element:", elementId);
 
-        // Remove from local state
         setAllDrawElements((prev) => {
           const filtered = prev.filter((el) => el.id !== elementId);
           console.log(
@@ -1568,11 +1665,215 @@ const DrawElement = ({
           return filtered;
         });
 
-        // Notify parent - pass both ID and pageNumber for consistency
+        if (selectedElementId === elementId) {
+          setSelectedElementId(null);
+        }
+
         onDrawDelete?.(elementId, pageNumber);
+        return;
+      }
+
+      if (action === "select" && drawEditingState?.selectedTool !== "eraser") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSelectedElementId(elementId);
       }
     },
-    [drawEditingState?.selectedTool, isDeleteMode, onDrawDelete, pageNumber]
+    [
+      allDrawElements,
+      drawEditingState?.selectedTool,
+      selectedElementId,
+      onDrawDelete,
+      pageNumber,
+    ]
+  );
+
+  // Handle resize
+  const handleResizeMouseMove = useCallback(
+    (e) => {
+      if (!isResizing || !selectedElementId || !currentResizeHandle) return;
+
+      const element = allDrawElements.find((el) => el.id === selectedElementId);
+      if (!element) return;
+
+      const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+      const deltaX = coords.x - resizeStart.x;
+      const deltaY = coords.y - resizeStart.y;
+
+      let newStartX = resizeStart.startX;
+      let newStartY = resizeStart.startY;
+      let newEndX = resizeStart.endX;
+      let newEndY = resizeStart.endY;
+      let newX = resizeStart.elementX;
+      let newY = resizeStart.elementY;
+
+      if (element.type === "emoji") {
+        // For emojis, just change size
+        const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+        const newSize = Math.max(16, resizeStart.elementX + distance);
+
+        const updatedElement = {
+          ...element,
+          size: newSize,
+        };
+
+        setAllDrawElements((prev) =>
+          prev.map((el) => (el.id === selectedElementId ? updatedElement : el))
+        );
+
+        onDrawUpdate?.(selectedElementId, { size: newSize });
+        return;
+      }
+
+      // Handle different resize directions for shapes and lines
+      switch (currentResizeHandle) {
+        case "nw":
+          newStartX = resizeStart.startX + deltaX;
+          newStartY = resizeStart.startY + deltaY;
+          break;
+        case "ne":
+          newEndX = resizeStart.endX + deltaX;
+          newStartY = resizeStart.startY + deltaY;
+          break;
+        case "sw":
+          newStartX = resizeStart.startX + deltaX;
+          newEndY = resizeStart.endY + deltaY;
+          break;
+        case "se":
+          newEndX = resizeStart.endX + deltaX;
+          newEndY = resizeStart.endY + deltaY;
+          break;
+        case "n":
+          if (element.type === "line" || element.type === "arrow") {
+            newStartY = resizeStart.startY + deltaY;
+          } else {
+            newStartY = resizeStart.startY + deltaY;
+          }
+          break;
+        case "s":
+          if (element.type === "line" || element.type === "arrow") {
+            newEndY = resizeStart.endY + deltaY;
+          } else {
+            newEndY = resizeStart.endY + deltaY;
+          }
+          break;
+        case "e":
+          if (element.type === "line" || element.type === "arrow") {
+            newEndX = resizeStart.endX + deltaX;
+          } else {
+            newEndX = resizeStart.endX + deltaX;
+          }
+          break;
+        case "w":
+          if (element.type === "line" || element.type === "arrow") {
+            newStartX = resizeStart.startX + deltaX;
+          } else {
+            newStartX = resizeStart.startX + deltaX;
+          }
+          break;
+      }
+
+      // Apply page boundaries
+      const pageBounds = getPageBoundaries();
+      if (pageBounds) {
+        const pageBaseWidth = (pageBounds.width * 100) / zoom;
+        const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+        newStartX = Math.max(0, Math.min(pageBaseWidth, newStartX));
+        newStartY = Math.max(0, Math.min(pageBaseHeight, newStartY));
+        newEndX = Math.max(0, Math.min(pageBaseWidth, newEndX));
+        newEndY = Math.max(0, Math.min(pageBaseHeight, newEndY));
+      }
+
+      const updatedElement = {
+        ...element,
+        startX: newStartX,
+        startY: newStartY,
+        endX: newEndX,
+        endY: newEndY,
+      };
+
+      if (element.type === "emoji") {
+        updatedElement.x = newX;
+        updatedElement.y = newY;
+      }
+
+      setAllDrawElements((prev) =>
+        prev.map((el) => (el.id === selectedElementId ? updatedElement : el))
+      );
+
+      onDrawUpdate?.(selectedElementId, {
+        startX: newStartX,
+        startY: newStartY,
+        endX: newEndX,
+        endY: newEndY,
+        x: newX,
+        y: newY,
+      });
+    },
+    [
+      isResizing,
+      selectedElementId,
+      currentResizeHandle,
+      resizeStart,
+      allDrawElements,
+      screenToPdfCoordinates,
+      zoom,
+      getPageBoundaries,
+      onDrawUpdate,
+    ]
+  );
+
+  // Handle drag move
+  const handleDragMouseMove = useCallback(
+    (e) => {
+      if (!isDragging || !selectedElementId) return;
+
+      const element = allDrawElements.find((el) => el.id === selectedElementId);
+      if (!element) return;
+
+      const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+      const deltaX = coords.x - dragStart.x;
+      const deltaY = coords.y - dragStart.y;
+
+      let updatedElement = { ...element };
+
+      if (element.type === "emoji") {
+        updatedElement.x = element.x + deltaX;
+        updatedElement.y = element.y + deltaY;
+
+        onDrawUpdate?.(selectedElementId, {
+          x: updatedElement.x,
+          y: updatedElement.y,
+        });
+      } else {
+        updatedElement.startX = element.startX + deltaX;
+        updatedElement.startY = element.startY + deltaY;
+        updatedElement.endX = element.endX + deltaX;
+        updatedElement.endY = element.endY + deltaY;
+
+        onDrawUpdate?.(selectedElementId, {
+          startX: updatedElement.startX,
+          startY: updatedElement.startY,
+          endX: updatedElement.endX,
+          endY: updatedElement.endY,
+        });
+      }
+
+      setAllDrawElements((prev) =>
+        prev.map((el) => (el.id === selectedElementId ? updatedElement : el))
+      );
+
+      setDragStart(coords);
+    },
+    [
+      isDragging,
+      selectedElementId,
+      dragStart,
+      allDrawElements,
+      screenToPdfCoordinates,
+      onDrawUpdate,
+    ]
   );
 
   // Enhanced mouse down handler
@@ -1588,9 +1889,36 @@ const DrawElement = ({
       e.preventDefault();
       e.stopPropagation();
 
+      // Check if clicking on a resize handle
+      if (e.target.classList.contains("resize-handle")) {
+        setIsResizing(true);
+        setCurrentResizeHandle(e.target.dataset.direction);
+
+        const element = allDrawElements.find(
+          (el) => el.id === selectedElementId
+        );
+        if (element) {
+          const coords = screenToPdfCoordinates(e.clientX, e.clientY);
+          setResizeStart({
+            x: coords.x,
+            y: coords.y,
+            startX: element.startX,
+            startY: element.startY,
+            endX: element.endX,
+            endY: element.endY,
+            elementX:
+              element.type === "emoji"
+                ? element.size || element.strokeWidth * 2
+                : element.x,
+            elementY: element.type === "emoji" ? 0 : element.y,
+          });
+        }
+        return;
+      }
+
       const coords = screenToPdfCoordinates(e.clientX, e.clientY);
 
-      // Check if clicking on existing element for deletion
+      // Check if clicking on existing element
       if (drawEditingState.selectedTool === "eraser") {
         const clickPoint = {
           x: e.clientX - containerRef.current.getBoundingClientRect().left,
@@ -1599,12 +1927,38 @@ const DrawElement = ({
 
         for (const element of allDrawElements) {
           if (distanceToElement(element, clickPoint)) {
-            handleElementClick(element.id, e);
+            handleElementInteraction(element.id, e, "delete");
             return;
           }
         }
         return;
       }
+
+      // Check for selection of existing elements (non-brush only)
+      const clickPoint = {
+        x: e.clientX - containerRef.current.getBoundingClientRect().left,
+        y: e.clientY - containerRef.current.getBoundingClientRect().top,
+      };
+
+      for (const element of allDrawElements) {
+        if (
+          element.type !== "brush" &&
+          distanceToElement(element, clickPoint)
+        ) {
+          if (selectedElementId === element.id) {
+            // Start dragging if already selected
+            setIsDragging(true);
+            setDragStart(coords);
+          } else {
+            // Select the element
+            handleElementInteraction(element.id, e, "select");
+          }
+          return;
+        }
+      }
+
+      // Deselect if clicking on empty space
+      setSelectedElementId(null);
 
       const elementId = generateId();
       lastPointRef.current = coords;
@@ -1625,15 +1979,31 @@ const DrawElement = ({
         timestamp: Date.now(),
       };
 
+      // Add emoji-specific properties
+      if (drawEditingState.selectedTool === "emoji") {
+        newElement.emoji = drawEditingState.selectedEmoji || "😀";
+        newElement.x = coords.x;
+        newElement.y = coords.y;
+        newElement.size = 100;
+        newElement.isComplete = true;
+
+        setAllDrawElements((prev) => {
+          const updated = [...prev, newElement];
+          console.log("🎨 DrawElement: Added emoji, total:", updated.length);
+          return updated;
+        });
+
+        setSelectedElementId(elementId); // Auto-select new emoji
+        onDrawAdd?.(newElement);
+        return;
+      }
+
       setCurrentElement(newElement);
       setCurrentPath([coords]);
       setIsDrawing(true);
 
-      // Add to parent immediately for line and arrow tools
-      if (
-        drawEditingState.selectedTool === "line" ||
-        drawEditingState.selectedTool === "arrow"
-      ) {
+      // Add to parent immediately for non-brush tools
+      if (drawEditingState.selectedTool !== "brush") {
         onDrawAdd?.(newElement);
       }
     },
@@ -1642,20 +2012,31 @@ const DrawElement = ({
       drawEditingState?.selectedTool,
       drawEditingState?.selectedColor,
       drawEditingState?.strokeWidth,
+      drawEditingState?.selectedEmoji,
       screenToPdfCoordinates,
       pageNumber,
       onDrawAdd,
       allDrawElements,
-      handleElementClick,
+      selectedElementId,
+      handleElementInteraction,
     ]
   );
 
-  // Enhanced mouse move with throttling for better performance
+  // Enhanced mouse move
   const handleMouseMove = useCallback(
     (e) => {
+      if (isResizing) {
+        handleResizeMouseMove(e);
+        return;
+      }
+
+      if (isDragging) {
+        handleDragMouseMove(e);
+        return;
+      }
+
       if (!isDrawing || !currentElement) return;
 
-      // Cancel any pending animation frame
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -1664,14 +2045,12 @@ const DrawElement = ({
         const coords = screenToPdfCoordinates(e.clientX, e.clientY);
 
         if (drawEditingState?.selectedTool === "brush") {
-          // Improve brush smoothness by filtering too close points
           const lastPoint = lastPointRef.current;
           const distance = Math.sqrt(
             Math.pow(coords.x - lastPoint.x, 2) +
               Math.pow(coords.y - lastPoint.y, 2)
           );
 
-          // Only add point if it's far enough from the last point
           if (distance > 1) {
             const newPath = [...currentPath, coords];
             setCurrentPath(newPath);
@@ -1688,7 +2067,10 @@ const DrawElement = ({
           }
         } else if (
           drawEditingState?.selectedTool === "line" ||
-          drawEditingState?.selectedTool === "arrow"
+          drawEditingState?.selectedTool === "arrow" ||
+          drawEditingState?.selectedTool === "square" ||
+          drawEditingState?.selectedTool === "circle" ||
+          drawEditingState?.selectedTool === "triangle"
         ) {
           const updatedElement = {
             ...currentElement,
@@ -1703,20 +2085,34 @@ const DrawElement = ({
     },
     [
       isDrawing,
+      isResizing,
+      isDragging,
       currentElement,
       currentPath,
       drawEditingState?.selectedTool,
       screenToPdfCoordinates,
       onDrawUpdate,
+      handleResizeMouseMove,
+      handleDragMouseMove,
     ]
   );
 
   // Enhanced mouse up handler
   const handleMouseUp = useCallback(
     (e) => {
+      if (isResizing) {
+        setIsResizing(false);
+        setCurrentResizeHandle(null);
+        return;
+      }
+
+      if (isDragging) {
+        setIsDragging(false);
+        return;
+      }
+
       if (!isDrawing || !currentElement) return;
 
-      // Cancel any pending animation frame
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -1750,6 +2146,11 @@ const DrawElement = ({
         return updated;
       });
 
+      // Auto-select non-brush elements
+      if (drawEditingState?.selectedTool !== "brush") {
+        setSelectedElementId(finalElement.id);
+      }
+
       // Handle parent notifications
       if (drawEditingState?.selectedTool === "brush") {
         onDrawAdd?.(finalElement);
@@ -1770,6 +2171,8 @@ const DrawElement = ({
     },
     [
       isDrawing,
+      isResizing,
+      isDragging,
       currentElement,
       currentPath,
       drawEditingState?.selectedTool,
@@ -1779,11 +2182,27 @@ const DrawElement = ({
     ]
   );
 
-  // Enhanced element rendering with hover effects
+  // Get cursor style for resize handles
+  const getCursorStyle = (direction) => {
+    const cursorMap = {
+      nw: "nw-resize",
+      ne: "ne-resize",
+      sw: "sw-resize",
+      se: "se-resize",
+      n: "n-resize",
+      s: "s-resize",
+      e: "e-resize",
+      w: "w-resize",
+    };
+    return cursorMap[direction] || "default";
+  };
+
+  // Enhanced element rendering with selection and resize handles
   const renderDrawElement = (element, isHovered = false) => {
     const scaledStrokeWidth = Math.max(1, (element.strokeWidth * zoom) / 100);
     const opacity =
       isHovered && drawEditingState?.selectedTool === "eraser" ? 0.5 : 1;
+    const isSelected = selectedElementId === element.id;
 
     const commonProps = {
       stroke: element.color,
@@ -1793,13 +2212,24 @@ const DrawElement = ({
       opacity,
       style: {
         cursor:
-          drawEditingState?.selectedTool === "eraser" ? "pointer" : "default",
+          drawEditingState?.selectedTool === "eraser"
+            ? "pointer"
+            : element.type !== "brush"
+            ? "pointer"
+            : "default",
         filter:
           isHovered && drawEditingState?.selectedTool === "eraser"
             ? "drop-shadow(0 0 3px rgba(255,0,0,0.5))"
+            : isSelected && element.type !== "brush"
+            ? "drop-shadow(0 2px 8px rgba(59, 130, 246, 0.3))"
             : "none",
       },
-      onClick: (e) => handleElementClick(element.id, e),
+      onClick: (e) =>
+        handleElementInteraction(
+          element.id,
+          e,
+          drawEditingState?.selectedTool === "eraser" ? "delete" : "select"
+        ),
       onMouseEnter: () => setHoveredElementId(element.id),
       onMouseLeave: () => setHoveredElementId(null),
     };
@@ -1862,9 +2292,177 @@ const DrawElement = ({
           {...commonProps}
         />
       );
+    } else if (element.type === "square") {
+      const x = Math.min(
+        (element.startX * zoom) / 100,
+        (element.endX * zoom) / 100
+      );
+      const y = Math.min(
+        (element.startY * zoom) / 100,
+        (element.endY * zoom) / 100
+      );
+      const width = Math.abs(((element.endX - element.startX) * zoom) / 100);
+      const height = Math.abs(((element.endY - element.startY) * zoom) / 100);
+
+      return (
+        <rect
+          key={element.id}
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          fill="none"
+          {...commonProps}
+        />
+      );
+    } else if (element.type === "circle") {
+      const centerX = (((element.startX + element.endX) / 2) * zoom) / 100;
+      const centerY = (((element.startY + element.endY) / 2) * zoom) / 100;
+      const radiusX =
+        Math.abs(((element.endX - element.startX) * zoom) / 100) / 2;
+      const radiusY =
+        Math.abs(((element.endY - element.startY) * zoom) / 100) / 2;
+
+      return (
+        <ellipse
+          key={element.id}
+          cx={centerX}
+          cy={centerY}
+          rx={radiusX}
+          ry={radiusY}
+          fill="none"
+          {...commonProps}
+        />
+      );
+    } else if (element.type === "triangle") {
+      const x1 = (((element.startX + element.endX) / 2) * zoom) / 100; // Top point
+      const y1 = (element.startY * zoom) / 100;
+      const x2 = (element.startX * zoom) / 100; // Bottom left
+      const y2 = (element.endY * zoom) / 100;
+      const x3 = (element.endX * zoom) / 100; // Bottom right
+      const y3 = (element.endY * zoom) / 100;
+
+      const points = `${x1},${y1} ${x2},${y2} ${x3},${y3}`;
+
+      return (
+        <polygon
+          key={element.id}
+          points={points}
+          fill="none"
+          {...commonProps}
+        />
+      );
+    } else if (element.type === "emoji") {
+      const x = (element.x * zoom) / 100;
+      const y = (element.y * zoom) / 100;
+      const fontSize = Math.max(
+        16,
+        ((element.size || element.strokeWidth * 2) * zoom) / 100
+      );
+
+      return (
+        <text
+          key={element.id}
+          x={x}
+          y={y}
+          fontSize={fontSize}
+          textAnchor="middle"
+          dominantBaseline="central"
+          style={{
+            cursor:
+              drawEditingState?.selectedTool === "eraser"
+                ? "pointer"
+                : "pointer",
+            opacity,
+            filter:
+              isHovered && drawEditingState?.selectedTool === "eraser"
+                ? "drop-shadow(0 0 3px rgba(255,0,0,0.5))"
+                : isSelected
+                ? "drop-shadow(0 2px 8px rgba(59, 130, 246, 0.3))"
+                : "none",
+          }}
+          onClick={(e) =>
+            handleElementInteraction(
+              element.id,
+              e,
+              drawEditingState?.selectedTool === "eraser" ? "delete" : "select"
+            )
+          }
+          onMouseEnter={() => setHoveredElementId(element.id)}
+          onMouseLeave={() => setHoveredElementId(null)}
+        >
+          {element.emoji}
+        </text>
+      );
     }
 
     return null;
+  };
+
+  // Render resize handles for selected element
+  const renderResizeHandles = (element) => {
+    if (!element || element.type === "brush") return null;
+
+    const bounds = getElementBounds(element);
+    const handleSize = 12;
+    const offset = handleSize / 2;
+
+    const handles = [];
+
+    if (element.type === "emoji") {
+      // For emoji, only show one resize handle at bottom-right
+      handles.push(
+        <circle
+          key="se"
+          className="resize-handle"
+          data-direction="se"
+          cx={bounds.right}
+          cy={bounds.bottom}
+          r={offset}
+          fill="#3b82f6"
+          stroke="#ffffff"
+          strokeWidth="2"
+          style={{
+            cursor: getCursorStyle("se"),
+            filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.2))",
+          }}
+        />
+      );
+    } else {
+      // For shapes and lines, show all handles
+      const handlePositions = [
+        { key: "nw", x: bounds.left, y: bounds.top },
+        { key: "ne", x: bounds.right, y: bounds.top },
+        { key: "sw", x: bounds.left, y: bounds.bottom },
+        { key: "se", x: bounds.right, y: bounds.bottom },
+        { key: "n", x: bounds.left + bounds.width / 2, y: bounds.top },
+        { key: "s", x: bounds.left + bounds.width / 2, y: bounds.bottom },
+        { key: "e", x: bounds.right, y: bounds.top + bounds.height / 2 },
+        { key: "w", x: bounds.left, y: bounds.top + bounds.height / 2 },
+      ];
+
+      handlePositions.forEach(({ key, x, y }) => {
+        handles.push(
+          <circle
+            key={key}
+            className="resize-handle"
+            data-direction={key}
+            cx={x}
+            cy={y}
+            r={offset}
+            fill="#3b82f6"
+            stroke="#ffffff"
+            strokeWidth="2"
+            style={{
+              cursor: getCursorStyle(key),
+              filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.2))",
+            }}
+          />
+        );
+      });
+    }
+
+    return handles;
   };
 
   // Add mouse event listeners with improved cleanup
@@ -1878,6 +2476,17 @@ const DrawElement = ({
       }
     };
 
+    // Handle clicks outside to deselect
+    const handleDocumentClick = (e) => {
+      if (
+        !container.contains(e.target) &&
+        !e.target.classList.contains("resize-handle") &&
+        drawEditingState?.addDrawingToPage
+      ) {
+        setSelectedElementId(null);
+      }
+    };
+
     if (drawEditingState?.addDrawingToPage) {
       container.addEventListener("mousedown", handleMouseDown, {
         passive: false,
@@ -1887,12 +2496,14 @@ const DrawElement = ({
       });
       document.addEventListener("mouseup", handleMouseUp, { passive: false });
       container.addEventListener("contextmenu", handleContextMenu);
+      document.addEventListener("click", handleDocumentClick);
 
       return () => {
         container.removeEventListener("mousedown", handleMouseDown);
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
         container.removeEventListener("contextmenu", handleContextMenu);
+        document.removeEventListener("click", handleDocumentClick);
 
         if (animationFrameRef.current) {
           cancelAnimationFrame(animationFrameRef.current);
@@ -1920,9 +2531,11 @@ const DrawElement = ({
     };
   }, [isDrawing]);
 
-  // Enhanced cursor logic
+  // Enhanced cursor logic with new tools
   const getCursor = () => {
     if (!drawEditingState?.addDrawingToPage) return "default";
+    if (isResizing) return "grabbing";
+    if (isDragging) return "grabbing";
 
     switch (drawEditingState?.selectedTool) {
       case "brush":
@@ -1931,6 +2544,14 @@ const DrawElement = ({
         return "crosshair";
       case "arrow":
         return "crosshair";
+      case "square":
+        return "crosshair";
+      case "circle":
+        return "crosshair";
+      case "triangle":
+        return "crosshair";
+      case "emoji":
+        return "pointer";
       case "eraser":
         return "pointer";
       default:
@@ -1938,17 +2559,21 @@ const DrawElement = ({
     }
   };
 
-  // Always render the drawing elements, only control interaction
   const shouldShowInteractiveLayer =
     drawEditingState?.showDrawToolbar || drawEditingState?.addDrawingToPage;
 
-  // ✅ DEBUG: Add console log to track state changes
+  // Debug: Add console log to track state changes
   useEffect(() => {
     console.log(
       `🎨 DrawElement Page ${pageNumber}: Total elements:`,
-      allDrawElements.length
+      allDrawElements.length,
+      `Selected: ${selectedElementId}`
     );
-  }, [allDrawElements, pageNumber]);
+  }, [allDrawElements, pageNumber, selectedElementId]);
+
+  const selectedElement = allDrawElements.find(
+    (el) => el.id === selectedElementId
+  );
 
   return (
     <div
@@ -1981,6 +2606,41 @@ const DrawElement = ({
             {renderDrawElement(currentElement)}
           </g>
         )}
+
+        {/* Render resize handles for selected element */}
+        {selectedElement &&
+          shouldShowInteractiveLayer &&
+          drawEditingState?.selectedTool !== "eraser" && (
+            <g className="resize-handles" style={{ pointerEvents: "auto" }}>
+              {renderResizeHandles(selectedElement)}
+            </g>
+          )}
+
+        {/* Selection outline for selected element */}
+        {selectedElement &&
+          shouldShowInteractiveLayer &&
+          selectedElement.type !== "brush" &&
+          drawEditingState?.selectedTool !== "eraser" && (
+            <g className="selection-outline" style={{ pointerEvents: "none" }}>
+              {(() => {
+                const bounds = getElementBounds(selectedElement);
+                return (
+                  <rect
+                    x={bounds.left - 2}
+                    y={bounds.top - 2}
+                    width={bounds.width + 4}
+                    height={bounds.height + 4}
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2"
+                    strokeDasharray="5,5"
+                    opacity="0.6"
+                    rx="4"
+                  />
+                );
+              })()}
+            </g>
+          )}
       </svg>
 
       {/* Only show tool indicator when toolbar is active */}
@@ -1991,6 +2651,31 @@ const DrawElement = ({
             style={{ zIndex: 20 }}
           >
             🗑️ Eraser Mode - Click to delete drawings
+          </div>
+        )}
+
+      {/* Tool-specific hints */}
+      {shouldShowInteractiveLayer &&
+        drawEditingState?.selectedTool === "emoji" && (
+          <div
+            className="absolute top-4 left-4 bg-yellow-500 text-white px-3 py-1 rounded-lg shadow-lg text-sm font-medium pointer-events-none"
+            style={{ zIndex: 20 }}
+          >
+            😀 Click to place emoji: {drawEditingState?.selectedEmoji || "😀"}
+          </div>
+        )}
+
+      {/* Selection hint */}
+      {shouldShowInteractiveLayer &&
+        selectedElement &&
+        selectedElement.type !== "brush" &&
+        drawEditingState?.selectedTool !== "eraser" && (
+          <div
+            className="absolute bottom-4 right-4 bg-blue-500 text-white px-3 py-1 rounded-lg shadow-lg text-sm font-medium pointer-events-none"
+            style={{ zIndex: 20 }}
+          >
+            🎯 Selected: {selectedElement.type} - Drag to move, use handles to
+            resize
           </div>
         )}
     </div>
@@ -2040,6 +2725,16 @@ const Allpagespreview = memo(
     allTextElements = [],
     allImageElements = [],
     combinedElements = [],
+    // ✅ NEW PAN TOOL PROPS
+    selectedTool = null,
+    isPanning = false,
+    scrollPos = { x: 0, y: 0 },
+    lastMousePos = { x: 0, y: 0 },
+    onPanMouseDown = null,
+    onPanMouseMove = null,
+    onPanMouseUp = null,
+    getCursor = null,
+    panToolClick = null,
   }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [hasError, setHasError] = useState(false);
@@ -3711,10 +4406,21 @@ const Allpagespreview = memo(
       <div
         ref={elementRef}
         className="w-full h-full overflow-hidden"
-        style={style}
+        style={{
+          ...style,
+          cursor: getCursor ? getCursor() : "default", // ✅ Add cursor
+        }}
+        onMouseDown={onPanMouseDown}
       >
         {/* File Preview Area */}
-        <div className="w-full relative h-full overflow-hidden">
+        <div
+          className="w-full relative h-full overflow-hidden"
+          style={{
+            transform:
+              selectedTool === "pan" ? `translateY(${-scrollPos.y}px)` : "none", // Only Y transform
+            transition: isPanning ? "none" : "transform 0.2s ease",
+          }}
+        >
           {renderPreview()}
 
           {/* Selected text info */}

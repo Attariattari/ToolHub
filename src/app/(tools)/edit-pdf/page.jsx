@@ -35,9 +35,11 @@ import FileUploaderForWatermark from "@/components/tools/FileUploaderForWatermar
 import PasswordModelPreveiw from "@/components/tools/PasswordModelPreveiw";
 import ZoomControls from "@/components/sections/EditZoomControls";
 import Allpagespreview from "@/components/sections/Allpagespreview";
-import { FaRegImage, FaShapes } from "react-icons/fa";
-import { MdOutlineEdit } from "react-icons/md";
-
+import { FaRegCircle, FaRegImage, FaShapes } from "react-icons/fa";
+import { MdOutlineEdit, MdPanTool } from "react-icons/md";
+import { FaRegSquareFull } from "react-icons/fa6";
+import { IoTriangleOutline } from "react-icons/io5";
+import { BsEmojiSmile } from "react-icons/bs";
 // PDF.js worker setup
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -228,10 +230,8 @@ const PDFThumbnail = memo(({ file, pageNum, isActive, onClick, zoom = 25 }) => {
 PDFThumbnail.displayName = "PDFThumbnail";
 
 export default function PDFViewer() {
-  // 📦 State: File Handling & PDF Processing
   const [files, setFiles] = useState([]);
   const [protectedFiles, setProtectedFiles] = useState([]);
-  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -241,6 +241,11 @@ export default function PDFViewer() {
   const [passwordProtectedFiles, setPasswordProtectedFiles] = useState(
     new Set()
   );
+
+  const [selectedTool, setSelectedTool] = useState(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
 
   const [isThumbnailVisible, setIsThumbnailVisible] = useState(true);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -289,26 +294,11 @@ export default function PDFViewer() {
     deleteRequested: false,
     addDrawingToPage: false,
     onDrawingAdded: null,
-  };
-  const initialShapeState = {
-    showShapeToolbar: false,
-    selectedSize: 16,
-    selectedFont: "Arial",
-    selectedColor: "#000000",
-    selectedBgColor: "transparent",
-    isBold: false,
-    isItalic: false,
-    isUnderline: false,
-    selectedAlignment: "left",
-    opacity: 1,
-    deleteRequested: false,
-    addTextToPage: false, // ✅ NEW: Flag to trigger text addition
-    onTextAdded: null, // ✅ NEW: Callback after text is added
+    showEmojiDropdown: false,
   };
   const [textEditingState, setTextEditingState] = useState(initialTextState);
   const [imageEditingState, setImageEditingState] = useState(initialImageState);
   const [drawEditingState, setDrawEditingState] = useState(initialDrawState);
-  const [shapeEditingState, setShapeEditingState] = useState(initialShapeState);
   const [allTextElements, setAllTextElements] = useState([]);
   const [clearAllTextElements, setClearAllTextElements] = useState(false);
   const [deleteSpecificElement, setDeleteSpecificElement] = useState(null);
@@ -322,20 +312,15 @@ export default function PDFViewer() {
   const [clearAllDrawElements, setClearAllDrawElements] = useState(false);
   const [deleteSpecificDrawElement, setDeleteSpecificDrawElement] =
     useState(null);
-  const [allShapeElements, setAllShapeElements] = useState([]);
-  const [clearAllShapeElements, setClearAllShapeElements] = useState(false);
-  const [deleteSpecificShapeElement, setDeleteSpecificShapeElement] =
-    useState(null);
   // drag side bar
   const [draggedElement, setDraggedElement] = useState(null);
   const [dragOverElement, setDragOverElement] = useState(null);
   // Refs
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
+  const containerRef = useRef(null);
   const mainViewerRef = useRef(null);
-  const handleDeleteSpecificComplete = () => {
-    setDeleteSpecificElement(null);
-  };
+
   // Check if a file is password protected
   const checkPasswordProtection = useCallback(async (file, id) => {
     try {
@@ -699,9 +684,14 @@ export default function PDFViewer() {
   if (isUploading) {
     return <ProgressScreen uploadProgress={uploadProgress} />;
   }
-  // UPDATED: Toggle text editing mode - ab direct text add hoga
-  const handleTextButtonClick = () => {
-    // Sabse pehle sab toolbars band karo
+  const handlePanToolClick = () => {
+    // Pehle sab toolbars band karo
+    setTextEditingState((prev) => ({
+      ...prev,
+      showTextToolbar: false,
+      addTextToPage: false,
+      onTextAdded: null,
+    }));
     setImageEditingState((prev) => ({
       ...prev,
       showImageToolbar: false,
@@ -711,9 +701,68 @@ export default function PDFViewer() {
       showDrawToolbar: false,
       addDrawingToPage: false,
     }));
-    setShapeEditingState((prev) => ({
+
+    // Phir pan tool toggle karo
+    setSelectedTool(selectedTool === "pan" ? null : "pan");
+  };
+
+  const handlePanMouseDown = (e) => {
+    if (selectedTool === "pan") {
+      setIsPanning(true);
+      setLastMousePos({ x: e.clientX, y: e.clientY });
+      e.preventDefault();
+    }
+  };
+
+  const handlePanMouseMove = (e) => {
+    if (isPanning && selectedTool === "pan") {
+      const deltaY = e.clientY - lastMousePos.y;
+
+      setScrollPos((prev) => ({
+        x: 0, // X always 0
+        y: prev.y - deltaY, // Only Y movement
+      }));
+
+      setLastMousePos({ x: e.clientX, y: e.clientY });
+      e.preventDefault();
+    }
+  };
+
+  const handlePanMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  const getCursor = () => {
+    if (selectedTool === "pan") {
+      return isPanning ? "grabbing" : "grab";
+    }
+    return "default";
+  };
+
+  // useEffect for global mouse events
+  useEffect(() => {
+    if (isPanning) {
+      document.addEventListener("mousemove", handlePanMouseMove);
+      document.addEventListener("mouseup", handlePanMouseUp);
+
+      return () => {
+        document.removeEventListener("mousemove", handlePanMouseMove);
+        document.removeEventListener("mouseup", handlePanMouseUp);
+      };
+    }
+  }, [isPanning, lastMousePos]);
+  // UPDATED: Toggle text editing mode - ab direct text add hoga
+  const handleTextButtonClick = () => {
+    // Sabse pehle sab toolbars band karo
+    setSelectedTool(null); // Pan tool band karo
+    setImageEditingState((prev) => ({
       ...prev,
-      showShapeToolbar: false,
+      showImageToolbar: false,
+    }));
+    setDrawEditingState((prev) => ({
+      ...prev,
+      showDrawToolbar: false,
+      addDrawingToPage: false,
     }));
 
     // Phir text toolbar kholo
@@ -868,6 +917,7 @@ export default function PDFViewer() {
   // 3. Update your handleImageButtonClick function
   const handleImageButtonClick = () => {
     // Sabse pehle sab toolbars band karo
+    setSelectedTool(null); // Pan tool band karo
     setTextEditingState((prev) => ({
       ...prev,
       showTextToolbar: false,
@@ -878,10 +928,6 @@ export default function PDFViewer() {
       ...prev,
       showDrawToolbar: false,
       addDrawingToPage: false,
-    }));
-    setShapeEditingState((prev) => ({
-      ...prev,
-      showShapeToolbar: false,
     }));
 
     // Create a file input element
@@ -1005,19 +1051,16 @@ export default function PDFViewer() {
     );
   }
   const getCombinedElements = () => {
-    return [
-      ...allTextElements,
-      ...allImageElements,
-      ...allDrawElements,
-      ...allShapeElements,
-    ].sort((a, b) => {
-      // First sort by page number
-      if (a.pageNumber !== b.pageNumber) {
-        return a.pageNumber - b.pageNumber;
+    return [...allTextElements, ...allImageElements, ...allDrawElements].sort(
+      (a, b) => {
+        // First sort by page number
+        if (a.pageNumber !== b.pageNumber) {
+          return a.pageNumber - b.pageNumber;
+        }
+        // Then sort by order within the same page
+        return (a.order || 0) - (b.order || 0);
       }
-      // Then sort by order within the same page
-      return (a.order || 0) - (b.order || 0);
-    });
+    );
   };
 
   // FIXED: Shape elements ko bhi reorder kiya ja raha hai
@@ -1093,22 +1136,10 @@ export default function PDFViewer() {
       return drawEl;
     });
 
-    // Update Shape Elements
-    const updatedShapeElements = allShapeElements.map((shapeEl) => {
-      if (shapeEl.pageNumber === draggedElement.pageNumber) {
-        const reorderedEl = reorderedPageElements.find(
-          (el) => el.id === shapeEl.id
-        );
-        return reorderedEl || shapeEl;
-      }
-      return shapeEl;
-    });
-
     // Update state with reordered elements
     setAllTextElements(updatedTextElements);
     setAllImageElements(updatedImageElements);
     setAllDrawElements(updatedDrawElements);
-    setAllShapeElements(updatedShapeElements); // FIXED: Shape elements bhi update ho rahe hain
   };
 
   // Enhanced drag handlers with better feedback
@@ -1176,6 +1207,7 @@ export default function PDFViewer() {
       element.text === undefined &&
       element.type === undefined;
     const isDraw = element.type !== undefined;
+    const isEmoji = element.type === "emoji"; // Emoji detection
 
     const isDragging = draggedElement?.id === element.id;
     const isDragOver = dragOverElement?.id === element.id;
@@ -1206,27 +1238,29 @@ export default function PDFViewer() {
         }
         onDragEnd={handleDragEnd}
         className={`flex items-center justify-between p-3 rounded-lg transition-all group mb-2 cursor-move relative
-          ${
-            isText
-              ? "bg-gray-50 hover:bg-gray-100"
-              : isDraw
-              ? "bg-red-50 hover:bg-red-100"
-              : "bg-red-50 hover:bg-red-100"
-          }
-          ${isDragging ? "opacity-50 scale-95 z-10" : ""}
-          ${
-            isDragOver && canDrop
-              ? "ring-2 ring-red-400 bg-red-100 transform scale-[1.02]"
-              : ""
-          }
-          ${
-            draggedElement &&
-            !canDrop &&
-            draggedElement.pageNumber !== element.pageNumber
-              ? "opacity-60"
-              : ""
-          }
-        `}
+        ${
+          isText
+            ? "bg-gray-50 hover:bg-gray-100"
+            : isEmoji
+            ? "bg-yellow-50 hover:bg-yellow-100"
+            : isDraw
+            ? "bg-red-50 hover:bg-red-100"
+            : "bg-red-50 hover:bg-red-100"
+        }
+        ${isDragging ? "opacity-50 scale-95 z-10" : ""}
+        ${
+          isDragOver && canDrop
+            ? "ring-2 ring-red-400 bg-red-100 transform scale-[1.02]"
+            : ""
+        }
+        ${
+          draggedElement &&
+          !canDrop &&
+          draggedElement.pageNumber !== element.pageNumber
+            ? "opacity-60"
+            : ""
+        }
+      `}
       >
         {/* Visual drop indicator */}
         {isDragOver && canDrop && (
@@ -1248,6 +1282,9 @@ export default function PDFViewer() {
           <div className="w-8 h-8 bg-white border border-gray-300 rounded flex items-center justify-center text-gray-600 overflow-hidden">
             {isText ? (
               <Type className="w-4 h-4" />
+            ) : isEmoji ? (
+              // Display the actual emoji
+              <span className="text-base">{element.emoji || "😀"}</span>
             ) : isDraw ? (
               element.type === "brush" ? (
                 <svg
@@ -1303,6 +1340,53 @@ export default function PDFViewer() {
                     strokeWidth={2}
                   />
                 </svg>
+              ) : element.type === "square" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <rect
+                    x="3"
+                    y="3"
+                    width="18"
+                    height="18"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                  />
+                </svg>
+              ) : element.type === "circle" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                  />
+                </svg>
+              ) : element.type === "triangle" ? (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M12 2L22 20H2L12 2Z"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                  />
+                </svg>
               ) : (
                 <svg
                   className="w-4 h-4"
@@ -1345,6 +1429,8 @@ export default function PDFViewer() {
                       ? text.substring(0, 20) + "..."
                       : text;
                   })()
+                : isEmoji
+                ? `Emoji ${element.emoji || "😀"} ${index + 1}`
                 : isDraw
                 ? `${
                     element.type?.charAt(0).toUpperCase() +
@@ -1358,6 +1444,12 @@ export default function PDFViewer() {
                   <span>{element.fontFamily}</span>
                   <span>•</span>
                   <span>{element.fontSize}px</span>
+                </>
+              ) : isEmoji ? (
+                <>
+                  <span className="text-sm">{element.emoji || "😀"}</span>
+                  <span>•</span>
+                  <span>Size: {element.fontSize || 24}px</span>
                 </>
               ) : isDraw ? (
                 <>
@@ -1393,7 +1485,9 @@ export default function PDFViewer() {
               }
             }}
             className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-            title={`Edit ${isText ? "text" : isDraw ? "drawing" : "image"}`}
+            title={`Edit ${
+              isText ? "text" : isEmoji ? "emoji" : isDraw ? "drawing" : "image"
+            }`}
           >
             <Edit className="w-4 h-4" />
           </button>
@@ -1411,7 +1505,7 @@ export default function PDFViewer() {
                   pageNumber: element.pageNumber,
                 });
               } else if (isDraw) {
-                // Delete draw element
+                // Delete draw element (including emoji)
                 setAllDrawElements((prev) =>
                   prev.filter((draw) => draw.id !== element.id)
                 );
@@ -1431,7 +1525,9 @@ export default function PDFViewer() {
               }
             }}
             className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-            title={`Delete ${isText ? "text" : isDraw ? "drawing" : "image"}`}
+            title={`Delete ${
+              isText ? "text" : isEmoji ? "emoji" : isDraw ? "drawing" : "image"
+            }`}
           >
             <Trash2 className="w-4 h-4" />
           </button>
@@ -1442,6 +1538,7 @@ export default function PDFViewer() {
   // Draw Button Handler
   const handleDrawButtonClick = () => {
     // Sabse pehle sab toolbars band karo
+    setSelectedTool(null); // Pan tool band karo
     setTextEditingState((prev) => ({
       ...prev,
       showTextToolbar: false,
@@ -1451,10 +1548,6 @@ export default function PDFViewer() {
     setImageEditingState((prev) => ({
       ...prev,
       showImageToolbar: false,
-    }));
-    setShapeEditingState((prev) => ({
-      ...prev,
-      showShapeToolbar: false,
     }));
 
     // Phir draw toolbar kholo AUR line tool select karo
@@ -1481,51 +1574,100 @@ export default function PDFViewer() {
       prev.filter((drawing) => drawing.id !== drawingId)
     );
   };
-  // Shape Button Handler
-  const handleShapeButtonClick = () => {
-    // Sabse pehle sab toolbars band karo
-    setTextEditingState((prev) => ({
-      ...prev,
-      showTextToolbar: false,
-      addTextToPage: false,
-      onTextAdded: null,
-    }));
-    setImageEditingState((prev) => ({
-      ...prev,
-      showImageToolbar: false,
-    }));
-    setDrawEditingState((prev) => ({
-      ...prev,
-      showDrawToolbar: false,
-      addDrawingToPage: false, // Drawing mode bhi band kar do
-    }));
-
-    // Phir Shape toolbar kholo
-    setShapeEditingState((prev) => ({
-      ...prev,
-      showShapeToolbar: true,
-    }));
+  const getEmojis = () => {
+    return [
+      "😀",
+      "😃",
+      "😄",
+      "😁",
+      "😆",
+      "😅",
+      "😂",
+      "🤣",
+      "😊",
+      "😇",
+      "🙂",
+      "🙃",
+      "😉",
+      "😌",
+      "😍",
+      "🥰",
+      "😘",
+      "😗",
+      "😙",
+      "😚",
+      "😋",
+      "😛",
+      "😝",
+      "😜",
+      "🤪",
+      "🤨",
+      "🧐",
+      "🤓",
+      "😎",
+      "🤩",
+      "🥳",
+      "😏",
+      "😒",
+      "😞",
+      "😔",
+      "😟",
+      "😕",
+      "🙁",
+      "😣",
+      "😖",
+      "👍",
+      "👎",
+      "👌",
+      "✌️",
+      "🤞",
+      "🤟",
+      "🤘",
+      "👊",
+      "✊",
+      "🤛",
+      "🤜",
+      "👏",
+      "🙌",
+      "👐",
+      "🤲",
+      "🙏",
+      "✍️",
+      "💪",
+      "🦾",
+      "🦿",
+      "❤️",
+      "🧡",
+      "💛",
+      "💚",
+      "💙",
+      "💜",
+      "🖤",
+      "🤍",
+      "🤎",
+      "💔",
+      "❣️",
+      "💕",
+      "💞",
+      "💓",
+      "💗",
+      "💖",
+      "💘",
+      "💝",
+      "💟",
+      "☮️",
+      "🔥",
+      "⭐",
+      "🌟",
+      "✨",
+      "⚡",
+      "💥",
+      "💯",
+      "💢",
+      "💨",
+      "💤",
+    ];
   };
-
-  const handleShapeAdd = (ShapeElement) => {
-    console.log("Shape added:", ShapeElement);
-    setAllShapeElements((prev) => [...prev, ShapeElement]);
-  };
-
-  const handleShapeUpdate = (ShapeingId, updates) => {
-    setAllShapeElements((prev) =>
-      prev.map((Shapeing) =>
-        Shapeing.id === ShapeingId ? { ...Shapeing, ...updates } : Shapeing
-      )
-    );
-  };
-
-  const handleShapeDelete = (ShapeingId) => {
-    setAllShapeElements((prev) =>
-      prev.filter((Shapeing) => Shapeing.id !== ShapeingId)
-    );
-  };
-
   return (
     <div className="md:h-[calc(100vh-82px)]">
       <div className="grid grid-cols-1 md:grid-cols-12 border h-full">
@@ -1574,18 +1716,16 @@ export default function PDFViewer() {
           </div>
           <div className="w-full">
             <div className="flex items-center gap-3 p-2 pl-10 bg-white border-b border-gray-20 relative">
-              <button className="p-2 rounded hover:bg-gray-100 transition-colors">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="15.959"
-                  height="19.44"
-                >
-                  <path
-                    fill="#707078"
-                    fillRule="evenodd"
-                    d="M12.213 19.44H7.37c-1.35 0-2.6-.677-3.263-1.774l-3.94-6.23c-.34-.462-.102-.795.115-.983s.74-.353 1.237-.324c.51.033.98.248 1.298.593l1.208 1.27c.093.097.246.134.384.09s.23-.155.23-.28l.007-8.732C4.65 2.474 5.162 2 5.793 2c.617 0 1.12.462 1.145 1.038l.001 6.78c0 .08.036.155.1.2s.153.087.244.086h.001c.09.001.18-.03.244-.085s.1-.13.102-.21V1.075C7.63.48 8.143 0 8.775 0H8.8c.63 0 1.155.476 1.155 1.072V9.8c0 .165.155.298.346.298s.346-.134.346-.298v-7.61c0-.596.503-1.08 1.134-1.08s1.138.484 1.138 1.08V9.8c0 .165.155.298.346.298s.346-.134.346-.298V5.325c0-.596.525-1.062 1.157-1.062h.033c.63 0 1.144.472 1.145 1.066l-.002 10.64c-.002 1.916-1.68 3.47-3.74 3.47z"
-                  ></path>
-                </svg>
+              <button
+                className={`p-2 rounded transition-colors ${
+                  selectedTool === "pan"
+                    ? "bg-red-100 text-red-600 ring-2 ring-red-400" // Active state - red colors
+                    : "hover:bg-red-100 text-gray-700" // Normal state
+                }`}
+                onClick={handlePanToolClick}
+                title="Pan Tool"
+              >
+                <MdPanTool className="w-5 h-5" />
               </button>
               <button
                 className={`p-3 rounded-lg transition-all duration-200 ${
@@ -1617,16 +1757,6 @@ export default function PDFViewer() {
                 onClick={handleDrawButtonClick}
               >
                 <MdOutlineEdit className="w-5 h-5" />
-              </button>
-              <button
-                className={`p-3 rounded-lg transition-all duration-200 ${
-                  shapeEditingState.showShapeToolbar
-                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
-                    : "hover:bg-red-100 text-gray-700"
-                }`}
-                onClick={handleShapeButtonClick}
-              >
-                <FaShapes className="w-5 h-5" />
               </button>
             </div>
             {textEditingState.showTextToolbar && (
@@ -1931,14 +2061,18 @@ export default function PDFViewer() {
             )}
             {drawEditingState.showDrawToolbar && (
               <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
-                {/* Line Tool - FIRST */}
-
-                {/* Color Picker */}
                 <div className="flex items-center gap-1">
                   <input
                     type="color"
                     className="w-8 h-8 border-2 border-gray-300 rounded cursor-pointer bg-white"
                     value={drawEditingState.selectedColor}
+                    onClick={() =>
+                      setDrawEditingState((prev) => ({
+                        ...prev,
+
+                        showEmojiDropdown: false,
+                      }))
+                    }
                     onChange={(e) =>
                       setDrawEditingState((prev) => ({
                         ...prev,
@@ -1948,9 +2082,17 @@ export default function PDFViewer() {
                     title="Color"
                   />
                 </div>
-
                 {/* Stroke Width Input with Lines Icon */}
-                <div className="flex items-center gap-1">
+                <div
+                  className="flex items-center gap-1"
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+
+                      showEmojiDropdown: false,
+                    }))
+                  }
+                >
                   <svg
                     width="16"
                     height="16"
@@ -1979,6 +2121,7 @@ export default function PDFViewer() {
                   />
                   <span className="text-xs text-gray-600">pt</span>
                 </div>
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
                 <button
                   className={`p-2 rounded transition-colors ${
                     drawEditingState.selectedTool === "line"
@@ -1990,6 +2133,7 @@ export default function PDFViewer() {
                       ...prev,
                       selectedTool: "line",
                       addDrawingToPage: true,
+                      showEmojiDropdown: false,
                     }))
                   }
                   title="Line"
@@ -2017,6 +2161,7 @@ export default function PDFViewer() {
                       ...prev,
                       selectedTool: "brush",
                       addDrawingToPage: true,
+                      showEmojiDropdown: false,
                     }))
                   }
                   title="Brush"
@@ -2033,7 +2178,6 @@ export default function PDFViewer() {
                     <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08-2 2.5-4 4-4z" />
                   </svg>
                 </button>
-
                 {/* Arrow Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
@@ -2046,6 +2190,7 @@ export default function PDFViewer() {
                       ...prev,
                       selectedTool: "arrow",
                       addDrawingToPage: true,
+                      showEmojiDropdown: false,
                     }))
                   }
                   title="Arrow"
@@ -2062,7 +2207,109 @@ export default function PDFViewer() {
                     <polyline points="7,7 17,7 17,17" />
                   </svg>
                 </button>
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "square"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "square",
+                      addDrawingToPage: true,
+                      showEmojiDropdown: false,
+                    }))
+                  }
+                  title="square"
+                >
+                  <FaRegSquareFull />
+                </button>
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "circle"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "circle",
+                      addDrawingToPage: true,
+                      showEmojiDropdown: false,
+                    }))
+                  }
+                  title="circle"
+                >
+                  <FaRegCircle />
+                </button>
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    drawEditingState.selectedTool === "triangle"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-gray-200"
+                  }`}
+                  onClick={() =>
+                    setDrawEditingState((prev) => ({
+                      ...prev,
+                      selectedTool: "triangle",
+                      showEmojiDropdown: false,
+                      addDrawingToPage: true,
+                    }))
+                  }
+                  title="triangle"
+                >
+                  <IoTriangleOutline />
+                </button>
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
 
+                {/* Emoji Button with Dropdown */}
+                <div className="relative">
+                  <button
+                    className={`p-2 rounded transition-colors ${
+                      drawEditingState.selectedTool === "emoji"
+                        ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                        : "hover:bg-gray-200"
+                    }`}
+                    onClick={() =>
+                      setDrawEditingState((prev) => ({
+                        ...prev,
+                        selectedTool: "emoji",
+                        addDrawingToPage: true,
+                        showEmojiDropdown: true,
+                      }))
+                    }
+                    title="emoji"
+                  >
+                    <BsEmojiSmile />
+                  </button>
+
+                  {/* Emoji Dropdown */}
+                  {drawEditingState.showEmojiDropdown && (
+                    <div className="absolute top-full mt-2 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 grid grid-cols-5 gap-1 min-w-[200px] max-h-[180px] overflow-y-auto z-50">
+                      {/* Common Emojis */}
+                      {getEmojis().map((emoji, index) => (
+                        <button
+                          key={index}
+                          className="p-1 text-lg hover:bg-gray-100 rounded transition-colors cursor-pointer"
+                          onClick={() => {
+                            setDrawEditingState((prev) => ({
+                              ...prev,
+                              selectedEmoji: emoji,
+                              showEmojiDropdown: false,
+                            }));
+                          }}
+                          title={emoji}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="h-6 w-px bg-gray-300 mx-1"></div>
                 {/* Undo */}
                 <button
                   className="p-2 rounded hover:bg-gray-200 transition-colors"
@@ -2099,7 +2346,6 @@ export default function PDFViewer() {
                     <path d="m21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
                   </svg>
                 </button>
-
                 {/* Delete/Clear All */}
                 <button
                   className="p-2 rounded hover:bg-red-100 hover:text-red-600 transition-colors"
@@ -2109,9 +2355,10 @@ export default function PDFViewer() {
                       showDrawToolbar: false,
                       addDrawingToPage: false,
                       selectedTool: "line", // Reset to default
+                      showEmojiDropdown: false, // Close emoji dropdown
                     }))
                   }
-                  title="Clear All Drawings"
+                  title="Close Tool"
                 >
                   <svg
                     width="16"
@@ -2127,13 +2374,7 @@ export default function PDFViewer() {
                     <line x1="14" y1="11" x2="14" y2="17" />
                   </svg>
                 </button>
-
                 {/* Close Toolbar */}
-              </div>
-            )}
-            {shapeEditingState.showShapeToolbar && (
-              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
-                Hello
               </div>
             )}
           </div>
@@ -2219,6 +2460,16 @@ export default function PDFViewer() {
                           allTextElements={allTextElements}
                           allImageElements={allImageElements}
                           allDrawElements={allDrawElements} // ✅ NEW
+                          // Panning props
+                          selectedTool={selectedTool}
+                          isPanning={isPanning}
+                          scrollPos={scrollPos}
+                          lastMousePos={lastMousePos}
+                          onPanMouseDown={handlePanMouseDown} // ✅ Updated name
+                          onPanMouseMove={handlePanMouseMove}
+                          onPanMouseUp={handlePanMouseUp}
+                          getCursor={getCursor}
+                          panToolClick={handlePanToolClick}
                         />
                       </div>
                     </div>
