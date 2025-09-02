@@ -25,8 +25,8 @@ import {
   RotateCw,
   Edit,
   GripVertical,
+  RefreshCcw,
 } from "lucide-react";
-
 import { pdfjs, Document, Page } from "react-pdf";
 import ProgressScreen from "@/components/tools/ProgressScreen";
 import Api from "@/utils/Api";
@@ -39,7 +39,7 @@ import { FaRegCircle, FaRegImage, FaShapes } from "react-icons/fa";
 import { MdOutlineEdit, MdPanTool } from "react-icons/md";
 import { FaRegSquareFull } from "react-icons/fa6";
 import { IoTriangleOutline } from "react-icons/io5";
-import { BsEmojiSmile } from "react-icons/bs";
+import { BsEmojiSmile, BsLayoutSidebar } from "react-icons/bs";
 // PDF.js worker setup
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -315,6 +315,7 @@ export default function PDFViewer() {
   // drag side bar
   const [draggedElement, setDraggedElement] = useState(null);
   const [dragOverElement, setDragOverElement] = useState(null);
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   // Refs
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
@@ -1669,7 +1670,7 @@ export default function PDFViewer() {
     ];
   };
   return (
-    <div className="md:h-[calc(100vh-82px)]">
+    <div className="md:h-[calc(100vh-82px)] h-[calc(100vh-145px)]">
       <div className="grid grid-cols-1 md:grid-cols-12 border h-full">
         {/* Thumbnails Sidebar - Left (1.5 columns) */}
         {isThumbnailVisible && (
@@ -1708,68 +1709,96 @@ export default function PDFViewer() {
         >
           {/* Vertical Separator with Arrow */}
           <div
-            className="absolute left-0 top-0 bottom-0 w-[15px] bg-gray-200 border-r cursor-pointer hover:bg-gray-300 flex items-center justify-center transition-colors duration-200 z-10"
+            className="absolute hidden md:flex left-0 top-0 bottom-0 w-[15px] bg-gray-200 border-r cursor-pointer hover:bg-gray-300 items-center justify-center transition-colors duration-200 z-10 overflow-hidden"
             onClick={() => setIsThumbnailVisible(!isThumbnailVisible)}
             title="Hide Thumbnails"
           >
             {isThumbnailVisible ? <ChevronLeft /> : <ChevronRight />}
           </div>
           <div className="w-full">
-            <div className="flex items-center gap-3 p-2 pl-10 bg-white border-b border-gray-20 relative">
-              <button
-                className={`p-2 rounded transition-colors ${
-                  selectedTool === "pan"
-                    ? "bg-red-100 text-red-600 ring-2 ring-red-400" // Active state - red colors
-                    : "hover:bg-red-100 text-gray-700" // Normal state
-                }`}
-                onClick={handlePanToolClick}
-                title="Pan Tool"
-              >
-                <MdPanTool className="w-5 h-5" />
-              </button>
-              <button
-                className={`p-3 rounded-lg transition-all duration-200 ${
-                  textEditingState.showTextToolbar
-                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
-                    : "hover:bg-red-100 text-gray-700"
-                }`}
-                onClick={handleTextButtonClick}
-                title="Add Text Tool"
-              >
-                <Type className="w-5 h-5" />
-              </button>
-              <button
-                className={`p-3 rounded-lg transition-all duration-200 ${
-                  imageEditingState.showImageToolbar
-                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
-                    : "hover:bg-red-100 text-gray-700"
-                }`}
-                onClick={handleImageButtonClick}
-              >
-                <FaRegImage className="w-5 h-5" />
-              </button>
-              <button
-                className={`p-3 rounded-lg transition-all duration-200 ${
-                  drawEditingState.showDrawToolbar
-                    ? "bg-red-100 text-red-600 ring-2 ring-red-400"
-                    : "hover:bg-red-100 text-gray-700"
-                }`}
-                onClick={handleDrawButtonClick}
-              >
-                <MdOutlineEdit className="w-5 h-5" />
-              </button>
+            <div className="flex justify-between items-center gap-3 p-2 md:pl-10 pl-5  bg-white border-b border-gray-20 relative">
+              <div className="flex gap-1">
+                <button
+                  className={`p-2 rounded transition-colors ${
+                    selectedTool === "pan"
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400" // Active state - red colors
+                      : "hover:bg-red-100 text-gray-700" // Normal state
+                  }`}
+                  onClick={handlePanToolClick}
+                  title="Pan Tool"
+                >
+                  <MdPanTool className="w-5 h-5" />
+                </button>
+                <button
+                  className={`p-3 rounded-lg transition-all duration-200 ${
+                    textEditingState.showTextToolbar
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-red-100 text-gray-700"
+                  }`}
+                  onClick={handleTextButtonClick}
+                  title="Add Text Tool"
+                >
+                  <Type className="w-5 h-5" />
+                </button>
+                <button
+                  className={`p-3 rounded-lg transition-all duration-200 ${
+                    imageEditingState.showImageToolbar
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-red-100 text-gray-700"
+                  }`}
+                  onClick={handleImageButtonClick}
+                >
+                  <FaRegImage className="w-5 h-5" />
+                </button>
+                <button
+                  className={`p-3 rounded-lg transition-all duration-200 ${
+                    drawEditingState.showDrawToolbar
+                      ? "bg-red-100 text-red-600 ring-2 ring-red-400"
+                      : "hover:bg-red-100 text-gray-700"
+                  }`}
+                  onClick={handleDrawButtonClick}
+                >
+                  <MdOutlineEdit className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex gap-3">
+                <div
+                  className="flex items-center justify-center bg-transparent"
+                  onClick={() => setFiles([])}
+                  title="Load New PDF"
+                >
+                  <button className="group relative inline-flex items-center justify-center px-2 py-2 bg-gradient-to-r from-red-100 to-red-600 text-white font-semibold rounded-lg shadow-lg border-2 border-red-400 transition-all duration-300 ease-in-out transform hover:scale-105 hover:shadow-xl hover:from-red-200 hover:to-red-700 hover:border-red-500 active:scale-95 focus:outline-none focus:ring-4 focus:ring-red-300 focus:ring-opacity-50">
+                    <RefreshCcw className="w-5 h-5 transition-transform duration-300 group-hover:rotate-180" />
+                  </button>
+                </div>
+                <div
+                  className="flex items-center justify-center bg-transparent md:hidden"
+                  onClick={() => {
+                    setShowMobileSidebar(true);
+                  }}
+                  title="Show and hide Sidebar"
+                >
+                  <button className="group relative inline-flex items-center justify-center px-2 py-2 bg-gradient-to-r from-red-100 to-red-600 text-white font-semibold rounded-lg shadow-lg border-2 border-red-400 transition-all duration-300 ease-in-out transform hover:scale-105 hover:shadow-xl hover:from-red-200 hover:to-red-700 hover:border-red-500 active:scale-95 focus:outline-none focus:ring-4 focus:ring-red-300 focus:ring-opacity-50">
+                    <BsLayoutSidebar className="w-5 h-5 transition-transform duration-300 group-hover:rotate-180" />
+                  </button>
+                </div>
+              </div>
             </div>
             {textEditingState.showTextToolbar && (
-              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200">
+              <div className="absolute z-[9999] flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200">
                 {/* Text Icon */}
-                <span className="font-bold text-lg px-2">T</span>
+                <span className="font-bold text-lg px-2" title="Text Tool">
+                  T
+                </span>
 
                 {/* Font Family Dropdown */}
-                <div className="relative w-[60px]">
+                <div className="relative w-[60px]" title="Font Family">
                   <select
                     value={textEditingState.selectedFont}
                     onChange={(e) => handleFontChange(e.target.value)}
                     className="appearance-none bg-white border border-gray-300 rounded px-2 py-1 pr-6 text-xs focus:outline-none focus:border-red-500 w-full"
+                    title="Select Font Family"
                   >
                     {fontOptions.map((font) => (
                       <option key={font} value={font}>
@@ -1781,12 +1810,15 @@ export default function PDFViewer() {
                 </div>
 
                 {/* Font Size */}
-                <span className="text-sm font-medium">Т</span>
-                <div className="relative">
+                <span className="text-sm font-medium" title="Font Size">
+                  Т
+                </span>
+                <div className="relative" title="Font Size">
                   <select
                     value={textEditingState.selectedSize}
                     onChange={(e) => handleSizeChange(e.target.value)}
                     className="appearance-none bg-white border border-gray-300 rounded px-3 py-1 pr-8 text-sm focus:outline-none focus:border-red-500 w-16"
+                    title="Select Font Size"
                   >
                     {sizeOptions.map((size) => (
                       <option key={size} value={size}>
@@ -1807,6 +1839,7 @@ export default function PDFViewer() {
                       ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
+                  title="Bold (Ctrl+B)"
                 >
                   <Bold className="w-4 h-4" />
                 </button>
@@ -1818,6 +1851,7 @@ export default function PDFViewer() {
                       ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
+                  title="Italic (Ctrl+I)"
                 >
                   <Italic className="w-4 h-4" />
                 </button>
@@ -1829,12 +1863,13 @@ export default function PDFViewer() {
                       ? "bg-red-100 text-red-600"
                       : "hover:bg-gray-200"
                   }`}
+                  title="Underline (Ctrl+U)"
                 >
                   <Underline className="w-4 h-4" />
                 </button>
 
                 {/* Text Color */}
-                <div className="relative">
+                <div className="relative" title="Text Color">
                   <div className="flex items-center p-1 border border-gray-300 rounded hover:bg-gray-50">
                     <div className="w-6 h-4 flex flex-col">
                       <div className="w-6 h-3 bg-black rounded-t"></div>
@@ -1850,13 +1885,14 @@ export default function PDFViewer() {
                       value={textEditingState.selectedColor}
                       onChange={(e) => handleColorChange(e.target.value)}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      title="Change Text Color"
                     />
                     <ChevronDown className="w-3 h-3 ml-1 text-gray-500 pointer-events-none" />
                   </div>
                 </div>
 
                 {/* Background Color */}
-                <div className="relative">
+                <div className="relative" title="Background Color">
                   <div className="flex items-center p-1 border border-gray-300 rounded hover:bg-gray-50">
                     <div className="w-6 h-4 flex flex-col relative">
                       <svg className="w-4 h-3" viewBox="0 0 16 12" fill="none">
@@ -1880,6 +1916,7 @@ export default function PDFViewer() {
                       value={textEditingState.selectedBgColor}
                       onChange={(e) => handleBgColorChange(e.target.value)}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      title="Change Background Color"
                     />
                     <ChevronDown className="w-3 h-3 ml-1 text-gray-500 pointer-events-none" />
                   </div>
@@ -1887,8 +1924,8 @@ export default function PDFViewer() {
 
                 <div className="w-px h-6 bg-gray-300 mx-1"></div>
 
-                {/* Alignment (dropdown wala logic tumhare functions ke sath adjust ho jayega) */}
-                <div className="relative inline-block">
+                {/* Alignment */}
+                <div className="relative inline-block" title="Text Alignment">
                   <div className="flex items-center border border-gray-300 rounded">
                     <button
                       onClick={() =>
@@ -1899,13 +1936,14 @@ export default function PDFViewer() {
                         }))
                       }
                       className="p-1 flex items-center gap-1 hover:bg-gray-50"
+                      title="Text Alignment Options"
                     >
                       {current.icon}
                       <ChevronDown className="w-3 h-3 text-gray-500" />
                     </button>
                   </div>
                   {textEditingState.isAlignmentDropdownOpen && (
-                    <div className="absolute mt-1 w-28 bg-white border border-gray-200 rounded shadow-md z-10">
+                    <div className="absolute mt-1 w-28 bg-white border border-gray-200 rounded shadow-md z-[9999]">
                       {options.map((opt) => (
                         <button
                           key={opt.value}
@@ -1915,6 +1953,7 @@ export default function PDFViewer() {
                               ? "bg-red-100 text-red-600"
                               : ""
                           }`}
+                          title={`Align ${opt.value}`}
                         >
                           {opt.icon}
                           {opt.value}
@@ -1925,7 +1964,10 @@ export default function PDFViewer() {
                 </div>
 
                 {/* Opacity */}
-                <div className="flex items-center gap-2 bg-white border border-gray-300 rounded px-2 py-1">
+                <div
+                  className="flex items-center gap-2 bg-white border border-gray-300 rounded px-2 py-1"
+                  title="Text Opacity"
+                >
                   <input
                     type="range"
                     min="0"
@@ -1941,6 +1983,9 @@ export default function PDFViewer() {
                         textEditingState.opacity * 100
                       }%, #e5e7eb 100%)`,
                     }}
+                    title={`Opacity: ${Math.round(
+                      textEditingState.opacity * 100
+                    )}%`}
                   />
                   <span className="text-xs text-gray-700 w-8">
                     {Math.round(textEditingState.opacity * 100)}%
@@ -1951,18 +1996,21 @@ export default function PDFViewer() {
                 <button
                   onClick={handleDelete}
                   className="p-2 rounded hover:bg-red-50 hover:text-red-600 transition-colors"
+                  title="Delete Text"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             )}
             {imageEditingState.showImageToolbar && (
-              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
+              <div className="absolute z-[9999] flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
                 {/* Image Icon */}
-                <span className="text-lg px-2">🖼️</span>
+                <span className="text-lg px-2" title="Image Tool">
+                  🖼️
+                </span>
 
                 {/* Opacity dropdown */}
-                <div className="relative">
+                <div className="relative" title="Image Opacity">
                   <button
                     onClick={() =>
                       setImageEditingState((prev) => ({
@@ -1971,14 +2019,14 @@ export default function PDFViewer() {
                       }))
                     }
                     className="flex items-center gap-1 px-3 py-2 hover:bg-gray-200 rounded text-sm font-medium"
-                    title="Opacity"
+                    title="Change Image Opacity"
                   >
                     {imageEditingState.opacity}%
                     <ChevronDown size={14} className="text-gray-500" />
                   </button>
 
                   {imageEditingState.showOpacityDropdown && (
-                    <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10 min-w-[80px]">
+                    <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-[9999] min-w-[80px]">
                       {[25, 50, 75, 100].map((option) => (
                         <button
                           key={option}
@@ -1988,6 +2036,7 @@ export default function PDFViewer() {
                               ? "bg-red-50 text-red-600"
                               : "text-gray-700"
                           }`}
+                          title={`Set opacity to ${option}%`}
                         >
                           {option}%
                         </button>
@@ -2060,8 +2109,9 @@ export default function PDFViewer() {
               </div>
             )}
             {drawEditingState.showDrawToolbar && (
-              <div className="absolute z-50 flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
-                <div className="flex items-center gap-1">
+              <div className="absolute z-[9999] flex items-center justify-center gap-2 p-2 ml-[15px] bg-gray-50 border-b border-gray-200 rounded-lg shadow-lg">
+                {/* Color Picker */}
+                <div className="flex items-center gap-1" title="Drawing Color">
                   <input
                     type="color"
                     className="w-8 h-8 border-2 border-gray-300 rounded cursor-pointer bg-white"
@@ -2069,7 +2119,6 @@ export default function PDFViewer() {
                     onClick={() =>
                       setDrawEditingState((prev) => ({
                         ...prev,
-
                         showEmojiDropdown: false,
                       }))
                     }
@@ -2079,19 +2128,20 @@ export default function PDFViewer() {
                         selectedColor: e.target.value,
                       }))
                     }
-                    title="Color"
+                    title="Choose Drawing Color"
                   />
                 </div>
+
                 {/* Stroke Width Input with Lines Icon */}
                 <div
                   className="flex items-center gap-1"
                   onClick={() =>
                     setDrawEditingState((prev) => ({
                       ...prev,
-
                       showEmojiDropdown: false,
                     }))
                   }
+                  title="Stroke Width"
                 >
                   <svg
                     width="16"
@@ -2100,6 +2150,7 @@ export default function PDFViewer() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1"
+                    title="Line Thickness"
                   >
                     <line x1="3" y1="6" x2="21" y2="6" strokeWidth="1" />
                     <line x1="3" y1="12" x2="21" y2="12" strokeWidth="2" />
@@ -2117,11 +2168,14 @@ export default function PDFViewer() {
                         strokeWidth: parseInt(e.target.value) || 2,
                       }))
                     }
-                    title="Stroke Width"
+                    title="Set Stroke Width (1-50 pt)"
                   />
                   <span className="text-xs text-gray-600">pt</span>
                 </div>
+
                 <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+                {/* Line Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
                     drawEditingState.selectedTool === "line"
@@ -2136,7 +2190,7 @@ export default function PDFViewer() {
                       showEmojiDropdown: false,
                     }))
                   }
-                  title="Line"
+                  title="Draw Line"
                 >
                   <svg
                     width="16"
@@ -2149,6 +2203,7 @@ export default function PDFViewer() {
                     <line x1="7" y1="17" x2="17" y2="7" />
                   </svg>
                 </button>
+
                 {/* Brush Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
@@ -2164,7 +2219,7 @@ export default function PDFViewer() {
                       showEmojiDropdown: false,
                     }))
                   }
-                  title="Brush"
+                  title="Free Draw Brush"
                 >
                   <svg
                     width="16"
@@ -2178,6 +2233,7 @@ export default function PDFViewer() {
                     <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08-2 2.5-4 4-4z" />
                   </svg>
                 </button>
+
                 {/* Arrow Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
@@ -2193,7 +2249,7 @@ export default function PDFViewer() {
                       showEmojiDropdown: false,
                     }))
                   }
-                  title="Arrow"
+                  title="Draw Arrow"
                 >
                   <svg
                     width="16"
@@ -2207,7 +2263,10 @@ export default function PDFViewer() {
                     <polyline points="7,7 17,7 17,17" />
                   </svg>
                 </button>
+
                 <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+                {/* Square Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
                     drawEditingState.selectedTool === "square"
@@ -2222,10 +2281,12 @@ export default function PDFViewer() {
                       showEmojiDropdown: false,
                     }))
                   }
-                  title="square"
+                  title="Draw Square/Rectangle"
                 >
                   <FaRegSquareFull />
                 </button>
+
+                {/* Circle Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
                     drawEditingState.selectedTool === "circle"
@@ -2240,10 +2301,12 @@ export default function PDFViewer() {
                       showEmojiDropdown: false,
                     }))
                   }
-                  title="circle"
+                  title="Draw Circle/Ellipse"
                 >
                   <FaRegCircle />
                 </button>
+
+                {/* Triangle Tool */}
                 <button
                   className={`p-2 rounded transition-colors ${
                     drawEditingState.selectedTool === "triangle"
@@ -2258,14 +2321,15 @@ export default function PDFViewer() {
                       addDrawingToPage: true,
                     }))
                   }
-                  title="triangle"
+                  title="Draw Triangle"
                 >
                   <IoTriangleOutline />
                 </button>
+
                 <div className="h-6 w-px bg-gray-300 mx-1"></div>
 
                 {/* Emoji Button with Dropdown */}
-                <div className="relative">
+                <div className="relative" title="Add Emoji">
                   <button
                     className={`p-2 rounded transition-colors ${
                       drawEditingState.selectedTool === "emoji"
@@ -2280,14 +2344,14 @@ export default function PDFViewer() {
                         showEmojiDropdown: true,
                       }))
                     }
-                    title="emoji"
+                    title="Add Emoji Sticker"
                   >
                     <BsEmojiSmile />
                   </button>
 
                   {/* Emoji Dropdown */}
                   {drawEditingState.showEmojiDropdown && (
-                    <div className="absolute top-full mt-2 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 grid grid-cols-5 gap-1 min-w-[200px] max-h-[180px] overflow-y-auto z-50">
+                    <div className="absolute top-full mt-2 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 grid grid-cols-5 gap-1 min-w-[200px] max-h-[180px] overflow-y-auto z-[9999]">
                       {/* Common Emojis */}
                       {getEmojis().map((emoji, index) => (
                         <button
@@ -2300,7 +2364,7 @@ export default function PDFViewer() {
                               showEmojiDropdown: false,
                             }));
                           }}
-                          title={emoji}
+                          title={`Add ${emoji} emoji`}
                         >
                           {emoji}
                         </button>
@@ -2310,6 +2374,7 @@ export default function PDFViewer() {
                 </div>
 
                 <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
                 {/* Undo */}
                 <button
                   className="p-2 rounded hover:bg-gray-200 transition-colors"
@@ -2332,7 +2397,7 @@ export default function PDFViewer() {
                       });
                     }
                   }}
-                  title="Undo"
+                  title="Undo Last Drawing (Ctrl+Z)"
                 >
                   <svg
                     width="16"
@@ -2346,7 +2411,8 @@ export default function PDFViewer() {
                     <path d="m21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
                   </svg>
                 </button>
-                {/* Delete/Clear All */}
+
+                {/* Close Toolbar */}
                 <button
                   className="p-2 rounded hover:bg-red-100 hover:text-red-600 transition-colors"
                   onClick={() =>
@@ -2358,7 +2424,7 @@ export default function PDFViewer() {
                       showEmojiDropdown: false, // Close emoji dropdown
                     }))
                   }
-                  title="Close Tool"
+                  title="Close Drawing Tool"
                 >
                   <svg
                     width="16"
@@ -2374,13 +2440,12 @@ export default function PDFViewer() {
                     <line x1="14" y1="11" x2="14" y2="17" />
                   </svg>
                 </button>
-                {/* Close Toolbar */}
               </div>
             )}
           </div>
 
           {/* PDF Preview Area */}
-          <div className="md:h-[calc(100vh-143px)] h-[calc(100vh-82px)] md w-full bg-gray-100 overflow-hidden">
+          <div className="h-[calc(100vh-145px)] sm:h-[calc(100vh-165px)] md:h-[calc(100vh-143px)] w-full bg-gray-100 overflow-hidden">
             <div
               ref={mainViewerRef}
               className="h-full w-full max-w-5xl mx-auto overflow-auto custom-scrollbar"
@@ -2600,6 +2665,114 @@ export default function PDFViewer() {
             )}
           </div>
         </div>
+        {showMobileSidebar && (
+          <div
+            className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-50"
+            onClick={() => setShowMobileSidebar(false)}
+          >
+            <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-xl overflow-y-auto">
+              {" "}
+              <div className="flex flex-col h-full">
+                {/* Header */}
+                <div className="border-b border-gray-100">
+                  <h3 className="sticky top-0 bg-white text-2xl h-16 flex justify-center items-center font-bold text-gray-900 text-center">
+                    Edit PDF
+                  </h3>
+                </div>
+
+                {/* Content Area */}
+                <div className="flex-1 p-4">
+                  {/* Remove All Button */}
+                  {(allTextElements.length > 0 ||
+                    allImageElements.length > 0 ||
+                    allDrawElements.length > 0) && (
+                    <div className="flex justify-end mb-4">
+                      <button
+                        onClick={() => {
+                          // Clear all elements
+                          setAllTextElements([]);
+                          setAllImageElements([]);
+                          setAllDrawElements([]);
+                          setClearAllTextElements(true);
+                          setClearAllImageElements(true);
+                          setClearAllDrawElements(true);
+                          console.log("Removing all elements");
+                        }}
+                        className="text-red-500 hover:text-red-600 text-sm font-medium transition-colors"
+                      >
+                        Remove all
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Elements by Page */}
+                  {allTextElements.length === 0 &&
+                  allImageElements.length === 0 &&
+                  allDrawElements.length === 0 ? (
+                    <div className="text-center bg-red-50 border-2 border-dashed border-red-200 p-8 rounded-lg text-red-600 mt-8 transition-colors hover:bg-red-100 hover:border-red-300">
+                      <Type className="w-16 h-16 mx-auto mb-4 text-red-400" />
+                      <h3 className="text-lg font-semibold text-red-700 mb-2">
+                        No elements added
+                      </h3>
+                      <p className="text-red-500 mb-4">
+                        Get started by adding text, images, or drawings to your
+                        PDF
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {/* Group elements by page and show in order */}
+                      {Object.entries(
+                        getCombinedElements().reduce((acc, element) => {
+                          const page = element.pageNumber;
+                          if (!acc[page]) acc[page] = [];
+                          acc[page].push(element);
+                          return acc;
+                        }, {})
+                      )
+                        .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                        .map(([pageNumber, pageElements]) => (
+                          <div key={`page-${pageNumber}`}>
+                            {/* Page Header */}
+                            <div className="flex items-center justify-between mb-3 border-b border-gray-200 pb-2">
+                              <h4 className="text-sm font-semibold text-gray-700">
+                                Page {pageNumber}
+                              </h4>
+                              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                                {pageElements.length} element
+                                {pageElements.length !== 1 ? "s" : ""}
+                              </span>
+                            </div>
+
+                            {/* Ordered Elements */}
+                            {pageElements
+                              .sort((a, b) => (a.order || 0) - (b.order || 0))
+                              .map((element, index) =>
+                                renderElementItem(element, index, pageElements)
+                              )}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Action Button */}
+                {(allTextElements.length > 0 ||
+                  allImageElements.length > 0 ||
+                  allDrawElements.length > 0) && (
+                  <div className="border-t border-gray-100 p-4">
+                    <button className="w-full bg-red-500 hover:bg-red-600 text-white py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
+                      <span>Edit PDF</span>
+                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center">
+                        <ChevronRight className="w-3 h-3 text-red-500" />
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Password Modal */}

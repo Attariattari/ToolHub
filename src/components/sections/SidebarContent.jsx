@@ -60,121 +60,91 @@ function SidebarContent({
         </h3>
 
         {/* Conversion Mode Options */}
-        <div className="w-full relative">
-          <div className="flex w-full border border-gray-200 rounded-t overflow-hidden">
-            <div
+        <div className="w-full p-6 relative">
+          <div className="flex gap-2 ">
+            <button
               onClick={() => handleOptionChange("semantic")}
-              className={`relative w-1/2 h-28 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all
-      ${
-        activeOption === "semantic"
-          ? "bg-red-100 border-l border-red-600 border-b-0"
-          : "bg-white border-l-0 border-b border-gray-300"
-      }`}
+              className={`relative flex-1 p-3 rounded-lg text-sm font-medium transition-colors duration-200 flex flex-col items-center gap-2 ${
+                activeOption === "semantic"
+                  ? "bg-green-100 text-green-800 border-2 border-green-300"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
             >
               {activeOption === "semantic" && (
-                <div className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-                  <span className="text-white text-xs font-bold">✔</span>
+                <div className="absolute top-1 right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                  <Check className="w-3 h-3 text-white" />
                 </div>
               )}
-              <div className="flex flex-col p-0 m-0 items-center leading-none">
-                <div
-                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${
-                    activeOption === "semantic"
-                      ? "text-red-600"
-                      : "text-gray-500"
-                  }`}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                  >
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="M19 9.5H4A2.5 2.5 0 0 0 1.5 12v24A2.5 2.5 0 0 0 4 38.5h15a2.5 2.5 0 0 0 2.5-2.5V12A2.5 2.5 0 0 0 19 9.5ZM4 8a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h15a4 4 0 0 0 4-4V12a4 4 0 0 0-4-4H4ZM44 9.5H29a2.5 2.5 0 0 0-2.5 2.5v24a2.5 2.5 0 0 0 2.5 2.5h15a2.5 2.5 0 0 0 2.5-2.5V12A2.5 2.5 0 0 0 44 9.5ZM29 8a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h15a4 4 0 0 0 4-4V12a4 4 0 0 0-4-4H29Z"
-                      clipRule="evenodd"
-                    ></path>
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="M15 18H5v-3h10v3ZM40 18H30v-3h10v3ZM18 21H5v-1h13v1ZM43 21H30v-1h13v1ZM18 25H5v-1h13v1ZM43 25H30v-1h13v1ZM18 29H5v-1h13v1ZM43 29H30v-1h13v1ZM18 33H5v-1h13v1ZM43 33H30v-1h13v1Z"
-                      clipRule="evenodd"
-                    ></path>
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="M10 26H5v-3h5v3ZM35 26h-5v-3h5v3ZM18 30h-5v-3h5v3ZM43 30h-5v-3h5v3Z"
-                      clipRule="evenodd"
-                    ></path>
-                  </svg>
-                </div>
-              </div>
-              <p
-                className={`text-sm font-medium ${
-                  activeOption === "semantic" ? "text-red-600" : "text-gray-500"
-                }`}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 48 48"
+                className="text-current"
               >
-                Semantic Text
-              </p>
-            </div>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="M19 9.5H4A2.5 2.5 0 0 0 1.5 12v24A2.5 2.5 0 0 0 4 38.5h15a2.5 2.5 0 0 0 2.5-2.5V12A2.5 2.5 0 0 0 19 9.5ZM4 8a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h15a4 4 0 0 0 4-4V12a4 4 0 0 0-4-4H4ZM44 9.5H29a2.5 2.5 0 0 0-2.5 2.5v24a2.5 2.5 0 0 0 2.5 2.5h15a2.5 2.5 0 0 0 2.5-2.5V12A2.5 2.5 0 0 0 44 9.5ZM29 8a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h15a4 4 0 0 0 4-4V12a4 4 0 0 0-4-4H29Z"
+                  clipRule="evenodd"
+                ></path>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="M15 18H5v-3h10v3ZM40 18H30v-3h10v3ZM18 21H5v-1h13v1ZM43 21H30v-1h13v1ZM18 25H5v-1h13v1ZM43 25H30v-1h13v1ZM18 29H5v-1h13v1ZM43 29H30v-1h13v1ZM18 33H5v-1h13v1ZM43 33H30v-1h13v1Z"
+                  clipRule="evenodd"
+                ></path>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="M10 26H5v-3h5v3ZM35 26h-5v-3h5v3ZM18 30h-5v-3h5v3ZM43 30h-5v-3h5v3Z"
+                  clipRule="evenodd"
+                ></path>
+              </svg>
+              Semantic Text
+            </button>
 
-            <div
+            <button
               onClick={() => handleOptionChange("overlay")}
-              className={`relative w-1/2 h-28 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all
-      ${
-        activeOption === "overlay"
-          ? "bg-red-100 border-l border-red-600 border-b-0"
-          : "bg-white border-l-0 border-b border-gray-300"
-      }`}
+              className={`relative flex-1 p-3 rounded-lg text-sm font-medium transition-colors duration-200 flex flex-col items-center gap-2 ${
+                activeOption === "overlay"
+                  ? "bg-green-100 text-green-800 border-2 border-green-300"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
             >
               {activeOption === "overlay" && (
-                <div className="absolute top-2 left-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-                  <span className="text-white text-xs font-bold">✔</span>
+                <div className="absolute top-1 right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                  <Check className="w-3 h-3 text-white" />
                 </div>
               )}
-              <div className="flex flex-col p-0 m-0 items-center leading-none">
-                <div
-                  className={`text-4xl w-12 h-8 flex justify-center items-center font-bold ${
-                    activeOption === "overlay"
-                      ? "text-red-600"
-                      : "text-gray-500"
-                  }`}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="48"
-                    height="48"
-                  >
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="M27 18.5H8A2.5 2.5 0 0 0 5.5 21v19A2.5 2.5 0 0 0 8 42.5h19a2.5 2.5 0 0 0 2.5-2.5V21a2.5 2.5 0 0 0-2.5-2.5ZM8 17a4 4 0 0 0-4 4v19a4 4 0 0 0 4 4h19a4 4 0 0 0 4-4V21a4 4 0 0 0-4-4H8Z"
-                      clipRule="evenodd"
-                    ></path>
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="M40 5.5H21A2.5 2.5 0 0 0 18.5 8v19a2.5 2.5 0 0 0 2.5 2.5h19a2.5 2.5 0 0 0 2.5-2.5V8A2.5 2.5 0 0 0 40 5.5ZM21 4a4 4 0 0 0-4 4v19a4 4 0 0 0 4 4h19a4 4 0 0 0 4-4V8a4 4 0 0 0-4-4H21Z"
-                      clipRule="evenodd"
-                    ></path>
-                    <path
-                      fill="currentColor"
-                      fillRule="evenodd"
-                      d="m22 18-4 4-.707-.707 4-4L22 18ZM31 27l-4 4-.707-.707 4-4L31 27ZM25 18l-7 7-.707-.707 7-7L25 18ZM31 24l-7 7-.707-.707 7-7L31 24ZM28 18 18 28l-.707-.707 10-10L28 18ZM31 21 21 31l-.707-.707 10-10L31 21ZM30 19 19 30l-.707-.707 11-11L30 19Z"
-                      clipRule="evenodd"
-                    ></path>
-                  </svg>
-                </div>
-              </div>
-              <p
-                className={`text-sm font-medium ${
-                  activeOption === "overlay" ? "text-red-600" : "text-gray-500"
-                }`}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 48 48"
+                className="text-current"
               >
-                Content Overlay
-              </p>
-            </div>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="M27 18.5H8A2.5 2.5 0 0 0 5.5 21v19A2.5 2.5 0 0 0 8 42.5h19a2.5 2.5 0 0 0 2.5-2.5V21a2.5 2.5 0 0 0-2.5-2.5ZM8 17a4 4 0 0 0-4 4v19a4 4 0 0 0 4 4h19a4 4 0 0 0 4-4V21a4 4 0 0 0-4-4H8Z"
+                  clipRule="evenodd"
+                ></path>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="M40 5.5H21A2.5 2.5 0 0 0 18.5 8v19a2.5 2.5 0 0 0 2.5 2.5h19a2.5 2.5 0 0 0 2.5-2.5V8A2.5 2.5 0 0 0 40 5.5ZM21 4a4 4 0 0 0-4 4v19a4 4 0 0 0 4 4h19a4 4 0 0 0 4-4V8a4 4 0 0 0-4-4H21Z"
+                  clipRule="evenodd"
+                ></path>
+                <path
+                  fill="currentColor"
+                  fillRule="evenodd"
+                  d="m22 18-4 4-.707-.707 4-4L22 18ZM31 27l-4 4-.707-.707 4-4L31 27ZM25 18l-7 7-.707-.707 7-7L25 18ZM31 24l-7 7-.707-.707 7-7L31 24ZM28 18 18 28l-.707-.707 10-10L28 18ZM31 21 21 31l-.707-.707 10-10L31 21ZM30 19 19 30l-.707-.707 11-11L30 19Z"
+                  clipRule="evenodd"
+                ></path>
+              </svg>
+              Content Overlay
+            </button>
           </div>
         </div>
 

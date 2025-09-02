@@ -34,7 +34,7 @@ const ResizableTextElement = ({
   });
   const [currentResizeHandle, setCurrentResizeHandle] = useState(null);
   const [clickCount, setClickCount] = useState(0);
-  const [isManuallyResized, setIsManuallyResized] = useState(false); // Track manual resize
+  const [isManuallyResized, setIsManuallyResized] = useState(false);
   const elementRef = useRef(null);
   const textareaRef = useRef(null);
   const measureRef = useRef(null);
@@ -64,45 +64,95 @@ const ResizableTextElement = ({
     };
   }, []);
 
-  // Modified auto-resize function - respects manual resize
+  // Function to get PDF page boundaries
+  const getPageBoundaries = useCallback(() => {
+    const pageElement = elementRef.current?.closest("[data-page-number]");
+    if (!pageElement) return null;
+
+    const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
+    if (!pdfPageElement) return null;
+
+    const pageRect = pdfPageElement.getBoundingClientRect();
+    return {
+      width: pageRect.width,
+      height: pageRect.height,
+      element: pdfPageElement,
+    };
+  }, []);
+
+  // Enhanced auto-resize function - prioritize width expansion over height
   const autoResizeElement = useCallback(
     (text) => {
       if (!elementRef.current || textElement.isEditing) return;
+
+      const pageBounds = getPageBoundaries();
+      if (!pageBounds) return;
 
       const currentWidth = textElement.width;
       const currentHeight = textElement.height;
       const minWidth = Math.max(80, calculatedFontSize * 4);
       const minHeight = Math.max(40, calculatedFontSize * 2);
 
-      // Always measure and adjust height for text content
+      // Get page dimensions in base coordinates
+      const pageBaseWidth = (pageBounds.width * 100) / zoom;
+      const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+      // Check if element is at max boundaries - disable if so
+      const isAtMaxWidth = textElement.x + currentWidth >= pageBaseWidth - 10;
+      const isAtMaxHeight =
+        textElement.y + currentHeight >= pageBaseHeight - 10;
+
+      if (isAtMaxWidth && isAtMaxHeight) {
+        // Disable input if at maximum boundaries
+        onUpdate({ isDisabled: true });
+        return;
+      }
+
+      // Measure text with current width
       const measured = measureTextDimensions(text, (currentWidth * zoom) / 100);
       const measuredBaseHeight = (measured.height * 100) / zoom;
-      let newHeight = Math.max(minHeight, measuredBaseHeight + 16);
+      let requiredHeight = Math.max(minHeight, measuredBaseHeight + 16);
 
-      // Only auto-adjust width if NOT manually resized
-      let newWidth = currentWidth;
-      if (!isManuallyResized) {
-        const lines = (text || "").split("\n");
-        const maxLineLength = Math.max(...lines.map((line) => line.length));
-        const charWidth = calculatedFontSize * 0.6;
-        const estimatedWidth = maxLineLength * charWidth;
-        const maxWidthForPage =
-          ((elementRef.current
-            ?.closest("[data-page-number]")
-            ?.querySelector(".react-pdf__Page")
-            ?.getBoundingClientRect()?.width || 500) *
-            100) /
-          zoom;
+      // If text needs more height, try to expand width instead
+      if (requiredHeight > currentHeight && !isManuallyResized) {
+        const availableWidth = pageBaseWidth - textElement.x;
+        const maxNewWidth = Math.min(availableWidth, currentWidth * 1.5);
 
-        if (
-          estimatedWidth > currentWidth &&
-          newWidth < maxWidthForPage - textElement.x
-        ) {
-          newWidth = Math.min(
-            maxWidthForPage - textElement.x,
-            Math.max(currentWidth, estimatedWidth + 20)
+        if (maxNewWidth > currentWidth) {
+          // Try expanding width and see if height requirement reduces
+          const newMeasured = measureTextDimensions(
+            text,
+            (maxNewWidth * zoom) / 100
           );
+          const newRequiredHeight = Math.max(
+            minHeight,
+            (newMeasured.height * 100) / zoom + 16
+          );
+
+          if (
+            newRequiredHeight <= currentHeight ||
+            newRequiredHeight < requiredHeight
+          ) {
+            // Width expansion helps, use it
+            onUpdate({ width: maxNewWidth });
+            return;
+          }
         }
+      }
+
+      // If width expansion didn't help or isn't possible, adjust height normally
+      let newHeight = requiredHeight;
+      let newY = textElement.y;
+
+      // Check if new height would exceed page bottom
+      if (textElement.y + newHeight > pageBaseHeight) {
+        // Try to move element up
+        const excessHeight = textElement.y + newHeight - pageBaseHeight;
+        newY = Math.max(0, textElement.y - excessHeight);
+
+        // Recalculate available height
+        const availableHeight = pageBaseHeight - newY;
+        newHeight = Math.min(newHeight, availableHeight);
       }
 
       // Update dimensions
@@ -110,8 +160,8 @@ const ResizableTextElement = ({
       if (Math.abs(newHeight - currentHeight) > 5) {
         updates.height = newHeight;
       }
-      if (!isManuallyResized && Math.abs(newWidth - currentWidth) > 5) {
-        updates.width = newWidth;
+      if (Math.abs(newY - textElement.y) > 2) {
+        updates.y = newY;
       }
 
       if (Object.keys(updates).length > 0) {
@@ -125,6 +175,7 @@ const ResizableTextElement = ({
       measureTextDimensions,
       onUpdate,
       isManuallyResized,
+      getPageBoundaries,
     ]
   );
 
@@ -139,10 +190,13 @@ const ResizableTextElement = ({
     }
   }, [textElement.isEditing]);
 
-  // Modified function to adjust text layout - respects manual resize
+  // Enhanced function to adjust text layout with boundary constraints
   const adjustTextLayout = useCallback(() => {
     if (!elementRef.current || !measureRef.current || textElement.isEditing)
       return;
+
+    const pageBounds = getPageBoundaries();
+    if (!pageBounds) return;
 
     const currentWidth = (textElement.width * zoom) / 100;
     const text = textElement.text || "";
@@ -166,15 +220,42 @@ const ResizableTextElement = ({
     const measuredHeight = measureRef.current.scrollHeight;
     const baseHeight = (measuredHeight * 100) / zoom;
     const minHeight = Math.max(40, calculatedFontSize * 2);
-    const newHeight = Math.max(minHeight, baseHeight + 16);
+    let newHeight = Math.max(minHeight, baseHeight + 16);
 
-    // Only update height, respect manual width adjustments
-    if (Math.abs(newHeight - textElement.height) > 8) {
-      onUpdate({ height: newHeight });
+    // Get page dimensions in base coordinates
+    const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+    // Check if new height would exceed page boundaries
+    if (textElement.y + newHeight > pageBaseHeight) {
+      // Calculate how much we need to move up
+      const excessHeight = textElement.y + newHeight - pageBaseHeight;
+      const newY = Math.max(0, textElement.y - excessHeight);
+
+      // Recalculate available height at new position
+      const availableHeight = pageBaseHeight - newY;
+      newHeight = Math.min(newHeight, availableHeight);
+
+      // Update both position and height
+      if (
+        Math.abs(newHeight - textElement.height) > 8 ||
+        Math.abs(newY - textElement.y) > 2
+      ) {
+        onUpdate({
+          height: newHeight,
+          y: newY,
+        });
+      }
+    } else {
+      // Only update height if within bounds
+      if (Math.abs(newHeight - textElement.height) > 8) {
+        onUpdate({ height: newHeight });
+      }
     }
   }, [
     textElement.width,
     textElement.height,
+    textElement.x,
+    textElement.y,
     textElement.text,
     textElement.fontFamily,
     textElement.fontSize,
@@ -184,6 +265,7 @@ const ResizableTextElement = ({
     zoom,
     calculatedFontSize,
     onUpdate,
+    getPageBoundaries,
   ]);
 
   // Auto-adjust layout when dimensions or text changes
@@ -211,22 +293,6 @@ const ResizableTextElement = ({
     }
   }, [textElement.text, adjustTextLayout]);
 
-  // Function to get PDF page boundaries
-  const getPageBoundaries = useCallback(() => {
-    const pageElement = elementRef.current?.closest("[data-page-number]");
-    if (!pageElement) return null;
-
-    const pdfPageElement = pageElement.querySelector(".react-pdf__Page");
-    if (!pdfPageElement) return null;
-
-    const pageRect = pdfPageElement.getBoundingClientRect();
-    return {
-      width: pageRect.width,
-      height: pageRect.height,
-      element: pdfPageElement,
-    };
-  }, []);
-
   const handleMouseDown = (e) => {
     e.stopPropagation();
     e.preventDefault();
@@ -243,7 +309,7 @@ const ResizableTextElement = ({
     // Handle resize handles - mark as manually resized
     if (e.target.classList.contains("resize-handle")) {
       setIsResizing(true);
-      setIsManuallyResized(true); // Mark as manually resized
+      setIsManuallyResized(true);
       setCurrentResizeHandle(e.target.dataset.direction);
 
       const rect = elementRef.current.getBoundingClientRect();
@@ -455,6 +521,7 @@ const ResizableTextElement = ({
     return cursorMap[direction] || "default";
   };
 
+  // Enhanced textarea key handler with boundary checks
   const handleInputKeyDown = (e) => {
     e.stopPropagation();
 
@@ -464,6 +531,9 @@ const ResizableTextElement = ({
     } else if (e.key === "Enter" && e.shiftKey) {
       setTimeout(() => {
         if (textareaRef.current) {
+          const pageBounds = getPageBoundaries();
+          if (!pageBounds) return;
+
           textareaRef.current.style.height = "auto";
           const scrollHeight = textareaRef.current.scrollHeight;
           textareaRef.current.style.height = scrollHeight + "px";
@@ -472,7 +542,26 @@ const ResizableTextElement = ({
             40,
             (scrollHeight * 100) / zoom + 16
           );
-          if (Math.abs(newElementHeight - textElement.height) > 5) {
+
+          // Check page boundaries
+          const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+          if (textElement.y + newElementHeight > pageBaseHeight) {
+            // Calculate new position to keep element within bounds
+            const excessHeight =
+              textElement.y + newElementHeight - pageBaseHeight;
+            const newY = Math.max(0, textElement.y - excessHeight);
+            const availableHeight = pageBaseHeight - newY;
+            const constrainedHeight = Math.min(
+              newElementHeight,
+              availableHeight
+            );
+
+            onUpdate({
+              height: constrainedHeight,
+              y: newY,
+            });
+          } else if (Math.abs(newElementHeight - textElement.height) > 5) {
             onUpdate({ height: newElementHeight });
           }
         }
@@ -483,18 +572,37 @@ const ResizableTextElement = ({
     }
   };
 
+  // Enhanced textarea change handler with boundary checks
   const handleTextareaChange = (e) => {
     e.stopPropagation();
     const newText = e.target.value;
     onTextChange(newText);
 
     if (textareaRef.current) {
+      const pageBounds = getPageBoundaries();
+      if (!pageBounds) return;
+
       textareaRef.current.style.height = "auto";
       const scrollHeight = textareaRef.current.scrollHeight;
       textareaRef.current.style.height = scrollHeight + "px";
 
       const newElementHeight = Math.max(40, (scrollHeight * 100) / zoom + 16);
-      if (Math.abs(newElementHeight - textElement.height) > 5) {
+
+      // Check page boundaries
+      const pageBaseHeight = (pageBounds.height * 100) / zoom;
+
+      if (textElement.y + newElementHeight > pageBaseHeight) {
+        // Calculate new position to keep element within bounds
+        const excessHeight = textElement.y + newElementHeight - pageBaseHeight;
+        const newY = Math.max(0, textElement.y - excessHeight);
+        const availableHeight = pageBaseHeight - newY;
+        const constrainedHeight = Math.min(newElementHeight, availableHeight);
+
+        onUpdate({
+          height: constrainedHeight,
+          y: newY,
+        });
+      } else if (Math.abs(newElementHeight - textElement.height) > 5) {
         onUpdate({ height: newElementHeight });
       }
     }
@@ -2722,19 +2830,13 @@ const Allpagespreview = memo(
     deleteSpecificDrawElement = null,
     onDeleteSpecificDrawComplete = null,
     // Combined elements
-    allTextElements = [],
-    allImageElements = [],
     combinedElements = [],
     // ✅ NEW PAN TOOL PROPS
     selectedTool = null,
     isPanning = false,
     scrollPos = { x: 0, y: 0 },
-    lastMousePos = { x: 0, y: 0 },
     onPanMouseDown = null,
-    onPanMouseMove = null,
-    onPanMouseUp = null,
     getCursor = null,
-    panToolClick = null,
   }) => {
     const [isVisible, setIsVisible] = useState(false);
     const [hasError, setHasError] = useState(false);
@@ -4079,9 +4181,9 @@ const Allpagespreview = memo(
         }
 
         return (
-          <div className="flex justify-center items-start">
+          <div className="flex justify-center items-start min-h-full">
             <div className="flex gap-6">
-              <div className="flex flex-col items-center space-y-4">
+              <div className="flex flex-col items-center space-y-4 h-full">
                 <div className="flex space-x-2 mb-4">
                   {Array.from({ length: numPages }, (_, i) => i + 1).map(
                     (pageNum) => (
@@ -4098,7 +4200,10 @@ const Allpagespreview = memo(
                   )}
                 </div>
 
-                <div className="relative" data-page-number={currentPage}>
+                <div
+                  className="relative flex-1 flex items-center justify-center"
+                  data-page-number={currentPage}
+                >
                   <div
                     className="transition-all duration-300 hover:shadow-2xl relative"
                     style={{ transformOrigin: "center center" }}
@@ -4140,7 +4245,7 @@ const Allpagespreview = memo(
         }
 
         return (
-          <div className="flex justify-center items-start">
+          <div className="flex justify-center items-start min-h-full py-4">
             <div className="space-y-8">
               {pageGroups.map(([leftPage, rightPage], groupIndex) => (
                 <div
@@ -4235,7 +4340,7 @@ const Allpagespreview = memo(
       } else {
         // Continuous layout (default)
         return (
-          <div className="flex justify-center items-start">
+          <div className="flex justify-center items-start min-h-full py-4">
             <div className="space-y-8">
               {Array.from({ length: numPages }, (_, index) => {
                 const currentPageNumber = index + 1;
@@ -4305,39 +4410,58 @@ const Allpagespreview = memo(
     };
 
     const renderPreview = () => {
-      // Show lock icon for password-protected files
+      // Show lock icon for password-protected files - FIXED HEIGHT
       if (isPasswordProtected) {
         return (
-          <div className="w-full h-full bg-gray-50 flex flex-col items-center justify-center relative">
-            <div className="absolute top-2 left-2 bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-medium">
+          <div className="w-full h-full min-h-[600px] bg-gray-50 flex flex-col items-center justify-center relative">
+            <div className="absolute top-4 left-4 bg-gray-800 text-white text-xs px-3 py-2 rounded-full font-medium shadow-lg">
               Password required
             </div>
-            <IoMdLock className="text-4xl text-gray-600 mb-2" />
-            <div className="flex items-center gap-1 bg-black rounded-full py-1 px-2">
-              <div className="w-1 h-1 bg-white rounded-full"></div>
-              <div className="w-1 h-1 bg-white rounded-full"></div>
-              <div className="w-1 h-1 bg-white rounded-full"></div>
-              <div className="w-1 h-1 bg-white rounded-full"></div>
-              <div className="w-1 h-1 bg-white rounded-full"></div>
+            <div className="flex flex-col items-center space-y-6">
+              <IoMdLock className="text-6xl text-gray-600 mb-4" />
+              <div className="text-lg font-medium text-gray-700 mb-2">
+                This PDF is password protected
+              </div>
+              <div className="text-sm text-gray-500 text-center max-w-md">
+                Enter the password to view this document
+              </div>
+              <div className="flex items-center gap-2 bg-black rounded-full py-3 px-6 mt-4">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse delay-100"></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse delay-200"></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse delay-300"></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse delay-400"></div>
+              </div>
             </div>
           </div>
         );
       }
 
+      // Error or unhealthy state - FIXED HEIGHT
       if (!isVisible || hasError || !isHealthy) {
         return (
-          <div className="w-full h-full bg-gray-50 flex items-center justify-center relative">
-            <FileText className="w-16 h-16 text-gray-400" />
-            <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+          <div className="w-full h-full min-h-[600px] bg-gray-50 flex items-center justify-center relative">
+            <div className="flex flex-col items-center space-y-4">
+              <FileText className="w-20 h-20 text-gray-400" />
+              <div className="text-lg font-medium text-gray-600">
+                {hasError ? "Failed to load PDF" : "PDF Preview"}
+              </div>
+              <div className="text-sm text-gray-500">
+                {hasError
+                  ? "There was an error loading this document"
+                  : "Document preview will appear here"}
+              </div>
+            </div>
+            <div className="absolute bottom-4 left-4 text-xs text-gray-600 font-semibold bg-white px-3 py-1 rounded-full shadow">
               PDF
             </div>
             {!isHealthy && (
-              <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+              <div className="absolute top-4 right-4 bg-yellow-500 text-white text-xs px-3 py-2 rounded-full shadow-lg">
                 Preview Issue
               </div>
             )}
             {hasError && (
-              <div className="absolute top-2 left-2 bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+              <div className="absolute top-4 left-4 bg-red-500 text-white text-xs px-3 py-2 rounded-full shadow-lg">
                 Load Error
               </div>
             )}
@@ -4345,49 +4469,77 @@ const Allpagespreview = memo(
         );
       }
 
+      // PDF rendering - FULL HEIGHT
       if (
         file.type === "application/pdf" &&
         file.stableData &&
         containerWidth > 0
       ) {
         return (
-          <div className="w-full h-full bg-white overflow-auto custom-scrollbar">
+          <div className="w-full h-full min-h-full bg-white overflow-auto custom-scrollbar">
             {!isLoading ? (
               <Document
                 file={file.stableData.dataUrl}
                 onLoadSuccess={handleLoadSuccess}
                 onLoadError={handleLoadError}
                 loading={
-                  <div className="flex items-center justify-center h-full">
-                    <div className="w-8 h-8 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+                  <div className="flex items-center justify-center h-full min-h-[600px]">
+                    <div className="flex flex-col items-center space-y-4">
+                      <div className="w-12 h-12 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+                      <div className="text-lg font-medium text-red-600">
+                        Loading PDF...
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Please wait while we prepare your document
+                      </div>
+                    </div>
                   </div>
                 }
                 error={
-                  <div className="w-full h-full bg-red-50 flex flex-col items-center justify-center p-4">
-                    <FileText className="w-12 h-12 text-red-400 mb-2" />
-                    <div className="text-sm text-red-600 font-medium text-center">
-                      Could not load preview
+                  <div className="w-full h-full min-h-[600px] bg-red-50 flex flex-col items-center justify-center p-6">
+                    <FileText className="w-16 h-16 text-red-400 mb-4" />
+                    <div className="text-lg font-medium text-red-600 mb-2">
+                      Could not load PDF preview
+                    </div>
+                    <div className="text-sm text-red-500 text-center max-w-md">
+                      This file may be corrupted or in an unsupported format
                     </div>
                   </div>
                 }
                 options={pdfOptions}
-                className="w-full h-full"
+                className="w-full h-full min-h-full"
               >
-                {documentLoaded && <div className="p-4">{renderPages()}</div>}
+                {documentLoaded && (
+                  <div className="min-h-full">{renderPages()}</div>
+                )}
               </Document>
             ) : (
-              <div className="flex items-center justify-center h-full">
-                <div className="w-8 h-8 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+              <div className="flex items-center justify-center h-full min-h-[600px]">
+                <div className="flex flex-col items-center space-y-4">
+                  <div className="w-12 h-12 border-4 border-gray-300 border-t-red-600 rounded-full animate-spin" />
+                  <div className="text-lg font-medium text-red-600">
+                    Initializing PDF...
+                  </div>
+                </div>
               </div>
             )}
           </div>
         );
       }
 
+      // Default fallback - FIXED HEIGHT
       return (
-        <div className="w-full h-full bg-gray-50 flex items-center justify-center relative">
-          <FileText className="w-16 h-16 text-gray-400" />
-          <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+        <div className="w-full h-full min-h-[600px] bg-gray-50 flex items-center justify-center relative">
+          <div className="flex flex-col items-center space-y-4">
+            <FileText className="w-20 h-20 text-gray-400" />
+            <div className="text-lg font-medium text-gray-600">
+              File Preview
+            </div>
+            <div className="text-sm text-gray-500">
+              {file.name || "Document"}
+            </div>
+          </div>
+          <div className="absolute bottom-4 left-4 text-xs text-gray-600 font-semibold bg-white px-3 py-1 rounded-full shadow">
             {file.type.split("/")[1]?.toUpperCase() || "FILE"}
           </div>
         </div>
@@ -4405,19 +4557,19 @@ const Allpagespreview = memo(
     return (
       <div
         ref={elementRef}
-        className="w-full h-full overflow-hidden"
+        className="w-full h-full overflow-hidden min-h-full"
         style={{
           ...style,
-          cursor: getCursor ? getCursor() : "default", // ✅ Add cursor
+          cursor: getCursor ? getCursor() : "default",
         }}
         onMouseDown={onPanMouseDown}
       >
-        {/* File Preview Area */}
+        {/* File Preview Area - FULL HEIGHT CONTAINER */}
         <div
-          className="w-full relative h-full overflow-hidden"
+          className="w-full relative h-full min-h-full overflow-hidden"
           style={{
             transform:
-              selectedTool === "pan" ? `translateY(${-scrollPos.y}px)` : "none", // Only Y transform
+              selectedTool === "pan" ? `translateY(${-scrollPos.y}px)` : "none",
             transition: isPanning ? "none" : "transform 0.2s ease",
           }}
         >
@@ -4425,27 +4577,27 @@ const Allpagespreview = memo(
 
           {/* Selected text info */}
           {selectedTextId && textEditingState?.showTextToolbar && (
-            <div className="absolute bottom-2 left-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
-              <div className="text-xs text-gray-600 font-medium">
-                Text selected - Use toolbar to edit
+            <div className="absolute bottom-4 left-4 bg-white border border-gray-300 rounded-lg px-4 py-3 shadow-lg z-30">
+              <div className="text-sm text-gray-700 font-medium">
+                📝 Text selected - Use toolbar to edit
               </div>
             </div>
           )}
 
           {/* Selected image info */}
           {selectedImageId && imageEditingState?.showImageToolbar && (
-            <div className="absolute bottom-2 right-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
-              <div className="text-xs text-gray-600 font-medium">
-                Image selected - Use toolbar to edit
+            <div className="absolute bottom-4 right-4 bg-white border border-gray-300 rounded-lg px-4 py-3 shadow-lg z-30">
+              <div className="text-sm text-gray-700 font-medium">
+                🖼️ Image selected - Use toolbar to edit
               </div>
             </div>
           )}
 
           {/* Selected draw info */}
           {selectedDrawId && drawEditingState?.showDrawToolbar && (
-            <div className="absolute bottom-2 center-2 bg-white border border-gray-300 rounded-lg px-3 py-2 shadow-lg z-30">
-              <div className="text-xs text-gray-600 font-medium">
-                Drawing selected - Use toolbar to edit
+            <div className="absolute bottom-4 center-4 bg-white border border-gray-300 rounded-lg px-4 py-3 shadow-lg z-30">
+              <div className="text-sm text-gray-700 font-medium">
+                ✏️ Drawing selected - Use toolbar to edit
               </div>
             </div>
           )}
@@ -4479,27 +4631,29 @@ const Allpagespreview = memo(
           }
 
           .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
           }
 
           .custom-scrollbar::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 3px;
+            background: #f8f9fa;
+            border-radius: 4px;
           }
 
           .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 3px;
+            background: #cbd5e0;
+            border-radius: 4px;
+            border: 1px solid #e2e8f0;
           }
 
           .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
+            background: #a0aec0;
           }
 
           /* Prevent text selection while dragging */
           .text-element {
             pointer-events: auto;
+            user-select: none;
           }
 
           .text-element * {
@@ -4508,6 +4662,7 @@ const Allpagespreview = memo(
 
           .image-element {
             pointer-events: auto;
+            user-select: none;
           }
 
           .image-element * {
@@ -4516,6 +4671,7 @@ const Allpagespreview = memo(
 
           .draw-element {
             pointer-events: auto;
+            user-select: none;
           }
 
           .draw-element * {
@@ -4532,7 +4688,75 @@ const Allpagespreview = memo(
           .text-element:hover,
           .image-element:hover,
           .draw-element:hover {
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+            transform: translateY(-1px);
+          }
+
+          /* Loading animations */
+          @keyframes pulse {
+            0%,
+            100% {
+              opacity: 1;
+            }
+            50% {
+              opacity: 0.5;
+            }
+          }
+
+          @keyframes spin {
+            from {
+              transform: rotate(0deg);
+            }
+            to {
+              transform: rotate(360deg);
+            }
+          }
+
+          .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+          }
+
+          .animate-spin {
+            animation: spin 1s linear infinite;
+          }
+
+          /* Enhanced PDF container styles */
+          .pdf-container {
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            min-height: 100vh;
+          }
+
+          /* Better shadow for PDF pages */
+          .pdf-page {
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1),
+              0 4px 10px rgba(0, 0, 0, 0.05);
+            border-radius: 8px;
+            background: white;
+          }
+
+          /* Professional loading state */
+          .loading-container {
+            background: linear-gradient(45deg, #f8fafc, #e2e8f0);
+            border-radius: 12px;
+            padding: 2rem;
+          }
+
+          /* Password protection styling */
+          .password-container {
+            background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 3rem;
+            margin: 2rem;
+            border: 1px solid #e2e8f0;
+          }
+
+          /* Error state styling */
+          .error-container {
+            background: linear-gradient(135deg, #fef5f5 0%, #fed7d7 100%);
+            border-radius: 12px;
+            padding: 2rem;
+            border: 1px solid #feb2b2;
           }
         `}</style>
       </div>

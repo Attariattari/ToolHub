@@ -938,8 +938,7 @@ export default function comparepdf() {
   const fileDataCache = useRef({});
   const pdfDocumentCache = useRef({});
   const comparisonEngine = useRef(null);
-
-  // Initialize comparison engine properly - FIXED
+  //  Initialize comparison engine properly - FIXED
   useEffect(() => {
     // Create the comparison engine instance
     comparisonEngine.current = new PDFComparisonEngine();
@@ -957,7 +956,6 @@ export default function comparepdf() {
       }
     };
   }, []);
-
   useEffect(() => {
     const savedOption = localStorage.getItem("selectedOption");
     if (savedOption) {
@@ -2357,7 +2355,9 @@ export default function comparepdf() {
     const upCount = Array.isArray(overlayUp) ? overlayUp.length : 0;
     return downCount + upCount;
   };
+
   const overlayContainerRef = useRef(null);
+
   useEffect(() => {
     const bottomLayer = bottomLayerRef.current;
     const topLayer = topLayerRef.current;
@@ -2536,134 +2536,56 @@ export default function comparepdf() {
         comparisonComplete={comparisonComplete}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-10 border h-full">
+      <div className="grid grid-cols-1 md:grid-cols-10 border h-full relative">
         <div
           className={`${
             isSidebarVisible ? "md:col-span-7" : "col-span-12"
           } bg-gray-100 transition-all duration-500 ease-in-out transform`}
         >
-          <div className="flex justify-between items-center sticky top-0 z-10 bg-white border-b">
-            <div className="flex items-center">
-              <div className="w-16 cursor-pointer hover:bg-slate-100 hover:text-red-600 p-3 border-r border-gray-300 flex items-center justify-center">
-                <svg
-                  width="18"
-                  height="24"
-                  viewBox="0 0 18 24"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  {" "}
-                  <path
-                    d="M17.9529 10.8518L17.9507 6.69579C17.9507 5.45806 16.8918 4.45103 15.6483 4.45103C15.3427 4.45103 15.0405 4.51239 14.7383 4.62248V3.97368C14.7383 2.78287 13.8592 1.80471 12.6628 1.80471H12.4915C12.2379 1.80471 11.8952 1.8742 11.6689 1.9539C11.6314 0.717073 10.739 0 9.60939 0H9.43804C8.24193 0 7.48552 0.945971 7.48552 2.13678V2.30252C7.08541 2.1422 6.81736 2.1055 6.57439 2.1055H6.40304C5.20663 2.1055 4.16131 3.15584 4.16131 4.34666V10.2276C3.85911 9.9921 3.59348 9.81464 3.23174 9.71328C2.57294 9.52889 1.89934 9.61071 1.30219 9.94368C0.0782763 10.6265 -0.355986 12.1674 0.3149 13.3901C0.476577 13.7357 0.89301 14.6579 1.0157 15.1187C1.43183 16.6804 2.0728 18.7014 3.33238 20.4847C4.98028 22.8179 7.18574 24.0003 9.88863 24C9.93335 24 9.97929 23.9997 10.0243 23.9991C12.5039 23.963 14.3413 23.3175 15.6416 22.025C17.1623 20.513 18 18.5281 18 16.4304L17.9529 10.8518ZM14.615 21.0024C13.5954 22.016 12.0871 22.5237 10.0035 22.5538C9.96569 22.5544 9.92821 22.5547 9.89074 22.5547C6.26614 22.5547 3.82255 19.9995 2.42396 14.7481C2.24264 14.0675 1.605 12.7085 1.605 12.7085C1.30551 12.1773 1.49651 11.5023 2.03019 11.2046C2.28888 11.0602 2.58836 11.0247 2.87394 11.105C3.15921 11.185 3.39644 11.3709 3.5412 11.6284L5.81949 15.4138C6.02559 15.7561 6.47164 15.8677 6.81585 15.6625C7.16005 15.4574 7.26492 15.0134 7.05882 14.6708L5.67232 12.3782V4.34666C5.67232 3.95323 6.00746 3.60943 6.40304 3.60943H6.57439C6.96967 3.60943 7.48552 3.95323 7.48552 4.34666V11.0157C7.48552 11.4148 7.6889 11.7385 8.08992 11.7385C8.49095 11.7385 8.69433 11.4148 8.69433 11.0157V2.13678C8.69433 1.74335 8.90889 1.20314 9.30417 1.20314H9.60939C10.005 1.20314 10.2053 1.74335 10.2053 2.13678V11.3649C10.2053 11.764 10.5598 12.0877 10.9608 12.0877C11.3619 12.0877 11.7163 11.764 11.7163 11.3649V3.92706C11.6665 3.47979 11.9916 3.00786 12.3712 3.00786H12.5426C12.9378 3.00786 13.2273 3.57995 13.2273 3.97368V12.0642C13.2273 12.4634 13.5818 12.787 13.9828 12.787C14.3839 12.787 14.7383 12.4634 14.7383 12.0642V6.98244C14.7006 6.24131 15.2557 5.8963 15.6984 5.8963C16.1412 5.8963 16.5516 6.25514 16.5516 6.69579V10.548L16.5739 16.4367C16.5739 18.1419 15.861 19.7634 14.615 21.0024Z"
-                    fill="currentColor"
-                  ></path>
-                </svg>
-              </div>
-              <div className="flex p-3 hover:bg-slate-100 hover:text-red-600 cursor-pointer items-center gap-2 text-sm">
-                <svg
-                  width="33"
-                  height="26"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M14 13v7h-3.5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1H14Z"
-                    fill="currentColor"
-                  ></path>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M14.764 1H9a2 2 0 0 0-2 2v20a2 2 0 0 0 2 2h5.764a2.997 2.997 0 0 1-.593-1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.17c.132-.373.336-.711.594-1Z"
-                    fill="currentColor"
-                  ></path>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M14 5.5v1h-3a.5.5 0 0 1 0-1h3ZM14 8.5v1h-3a.5.5 0 0 1 0-1h3Z"
-                    fill="currentColor"
-                  ></path>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M30 2H17a1 1 0 0 0-1 1v20a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V3a1 1 0 0 0-1-2H17Z"
-                    fill="currentColor"
-                  ></path>
-                  <rect
-                    x="17.5"
-                    y="13"
-                    width="12"
-                    height="7"
-                    rx="1"
-                    fill="currentColor"
-                  ></rect>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M18.5 6a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5ZM18.5 9a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5ZM.853 7.854a.5.5 0 1 1-.707-.708l2-2a.498.498 0 0 1 .708 0l2 2a.5.5 0 1 1-.708.708L2.5 6.207.853 7.854Z"
-                    fill="currentColor"
-                  ></path>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M2.5 5.625c.345 0 .625.28.625.625V10a.625.625 0 1 1-1.25 0V6.25c0-.345.28-.625.625-.625ZM4.147 18.146a.5.5 0 0 1 .707.708l-2 2a.498.498 0 0 1-.708 0l-2-2a.5.5 0 0 1 .708-.708L2.5 19.793l1.647-1.647Z"
-                    fill="currentColor"
-                  ></path>
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M2.5 20.375a.625.625 0 0 1-.625-.625V16a.625.625 0 1 1 1.25 0v3.75c0 .345-.28.625-.625.625Z"
-                    fill="currentColor"
-                  ></path>
-                  <circle cx="2.5" cy="13" r="1" fill="currentColor"></circle>
-                </svg>
-
-                <h5>Scroll sync</h5>
-              </div>
-            </div>
-            <div
-              className="md:flex w-16 cursor-pointer hover:text-red-600 p-3 border-r border-gray-300 items-center justify-center"
-              onClick={() => {
-                // Check screen size and toggle appropriate sidebar
-                if (window.innerWidth >= 768) {
-                  // Desktop: toggle desktop sidebar
-                  setIsSidebarVisible(!isSidebarVisible);
-                } else {
-                  // Mobile: toggle mobile sidebar
-                  setShowMobileSidebar(true);
-                }
-              }}
+          <div
+            className="fixed right-0 p-2 z-50 w-8 h-8 bg-white rounded-lg shadow-lg cursor-pointer hover:bg-red-50 hover:text-red-600 flex items-center justify-center border border-gray-300 transition-all duration-200"
+            onClick={() => {
+              // Check screen size and toggle appropriate sidebar
+              if (window.innerWidth >= 768) {
+                // Desktop: toggle desktop sidebar
+                setIsSidebarVisible(!isSidebarVisible);
+              } else {
+                // Mobile: toggle mobile sidebar
+                setShowMobileSidebar(true);
+              }
+            }}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className={`transition-transform duration-300 ${
+                isSidebarVisible ? "rotate-180" : ""
+              }`}
             >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 20 20"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <rect
-                  x="0.75"
-                  y="0.75"
-                  width="18.5"
-                  height="18.5"
-                  rx="3.25"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <line
-                  x1="13.75"
-                  y1="1"
-                  x2="13.75"
-                  y2="20"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            </div>
+              <rect
+                x="0.75"
+                y="0.75"
+                width="18.5"
+                height="18.5"
+                rx="3.25"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <line
+                x1="13.75"
+                y1="1"
+                x2="13.75"
+                y2="20"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+            </svg>
           </div>
           {activeOption === "semantic" ? (
-            <div className="h-[calc(100vh-82px-3.3rem)]  md:h-[calc(100vh-82px-3.2rem)] w-full bg-gray-100 p-2 sm:p-4 overflow-hidden">
+            <div className="h-[calc(100vh-72px)]  md:h-[calc(100vh-72px)] w-full bg-gray-100 p-2 sm:p-4 overflow-hidden">
               <PDFComaprePreview
                 // Container props
                 containerRef={containerRef}
@@ -2796,8 +2718,9 @@ export default function comparepdf() {
         </div>
 
         {/* Desktop Sidebar */}
-        {isSidebarVisible && (
-          <div className="hidden md:flex md:col-span-3 overflow-y-auto custom-scrollbar border-l flex-col justify-between">
+
+        <div className="hidden md:flex md:col-span-3 overflow-y-auto custom-scrollbar border-l flex-col justify-between">
+          {isSidebarVisible && (
             <SidebarContent
               activeOption={activeOption}
               handleOptionChange={handleOptionChange}
@@ -2847,9 +2770,11 @@ export default function comparepdf() {
               Download={Download}
               FileText={FileText}
               toast={toast}
+              setIsSidebarVisible={setIsSidebarVisible}
+              isSidebarVisible={isSidebarVisible}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {showMobileSidebar && (
         <div
@@ -2906,6 +2831,8 @@ export default function comparepdf() {
               Download={Download}
               FileText={FileText}
               toast={toast}
+              setIsSidebarVisible={setIsSidebarVisible}
+              isSidebarVisible={isSidebarVisible}
             />
           </div>
         </div>

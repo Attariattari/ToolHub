@@ -45,14 +45,14 @@ export default function PDFComparePreview({
   showHighlights = true,
   leftDifferences = [],
   rightDifferences = [],
-  onToggleHighlights, // NEW PROP - function to toggle highlights
+  onToggleHighlights,
 
-  // Analysis props - NEWLY ADDED
+  // Analysis props
   leftAnalysis,
   rightAnalysis,
   comparisonResult,
 
-  // Mode props - NEWLY ADDED
+  // Mode props
   semanticMode = false,
   overlayMode = false,
 
@@ -167,10 +167,10 @@ export default function PDFComparePreview({
                               showHighlights={showHighlights}
                               differences={pageDifferences}
                               highlightColor="red"
-                              // NEWLY ADDED PROPS - Pass kiye gaye hain
+                              // Analysis props
                               semanticMode={semanticMode}
                               overlayMode={overlayMode}
-                              analysis={leftAnalysis} // Left panel ke liye leftAnalysis
+                              analysis={leftAnalysis}
                               comparisonResult={comparisonResult}
                               onToggleHighlights={onToggleHighlights}
                             />
@@ -326,10 +326,10 @@ export default function PDFComparePreview({
                               showHighlights={showHighlights}
                               differences={pageDifferences}
                               highlightColor="green"
-                              // NEWLY ADDED PROPS - Pass kiye gaye hain
+                              // Analysis props
                               semanticMode={semanticMode}
                               overlayMode={overlayMode}
-                              analysis={rightAnalysis} // Right panel ke liye rightAnalysis
+                              analysis={rightAnalysis}
                               comparisonResult={comparisonResult}
                               onToggleHighlights={onToggleHighlights}
                             />
