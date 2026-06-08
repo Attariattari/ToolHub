@@ -1,0 +1,28 @@
+﻿node : C:\Users\attar\Downloa
+ds\pdftools-frontend-main\pdf
+tools-frontend-main\eslint.co
+nfig.mjs:18
+At line:1 char:1
++ node -c eslint.config.mjs 
+2>&1 | out-file -encoding 
+utf8 error.txt
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~
+    + CategoryInfo           
+   : NotSpecified: (C:\User  
+  s\attar\...t.config.mjs:   
+ 18:String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+    if (config ? 
+.languageOptions ? .parser) {
+                 ^
+
+SyntaxError: Unexpected 
+token '.'
+    at checkSyntax (node:inte
+rnal/main/check_syntax:72:5)
+
+Node.js v25.2.1

@@ -1,0 +1,24 @@
+﻿
+> pdf-web-tools@0.1.0 lint
+> next lint
+
+node.exe : Key 
+"languageOptions": Key 
+"parser": Expected object 
+with parse() or 
+parseForESLint() method.
+At line:1 char:1
++ & "E:\FOR C APPS/node.exe" 
+"C:\Users\attar\AppData\Roami
+ng\npm/node_m ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (Key "la  
+  nguageOp...SLint() metho   
+ d.:String) [], RemoteExc    
+eption
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 

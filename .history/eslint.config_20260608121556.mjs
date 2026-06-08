@@ -15,7 +15,7 @@ const eslintConfig = [...compat.extends("next/core-web-vitals")];
 // Workaround: strip non-serializable Function values from parser objects
 // to prevent "Cannot serialize key 'parse'" errors during Next.js build.
 const cleanConfig = eslintConfig.map((config) => {
-    if (config && config.languageOptions && config.languageOptions.parser) {
+    if (config ? .languageOptions ? .parser) {
         const parser = {...config.languageOptions.parser };
         delete parser.parse;
         delete parser.parseForESLint;
@@ -23,7 +23,7 @@ const cleanConfig = eslintConfig.map((config) => {
             ...config,
             languageOptions: {
                 ...config.languageOptions,
-                parser: parser,
+                parser,
             },
         };
     }
