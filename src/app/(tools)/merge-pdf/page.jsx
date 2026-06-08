@@ -1,0 +1,1506 @@
+"use client"
+
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react"
+import { useRouter } from "next/navigation"
+import { FileText, X, ArrowRight, RotateCw, Move, Settings } from "lucide-react"
+import { IoMdLock } from "react-icons/io"
+import { Document, Page, pdfjs } from "react-pdf"
+import ProgressScreen from "@/components/tools/ProgressScreen"
+import FileUploader from "@/components/tools/FileUploader"
+import PasswordModal from "@/components/tools/PasswordModal"
+import Api from "@/utils/Api"
+import { toast } from "react-toastify"
+
+// PDF.js worker setup
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+
+// Constants
+const LIMITS = {
+  MAX_FILES: 15,
+  MAX_SIZE_MB: 200,
+  MIN_FILES: 2
+}
+
+// Utility functions
+const formatFileSize = (bytes) => (bytes / 1024 / 1024).toFixed(2) + " MB"
+const createFileId = (index) => Date.now() + index + Math.random()
+const isPasswordError = (error) =>
+  error.name === "PasswordException" ||
+  error.name === "MissingPDFException" ||
+  error.message?.includes("password") ||
+  error.message?.includes("encrypted")
+
+// Custom hooks
+const useFileCache = () => {
+  const fileDataCache = useRef({})
+  const pdfDocumentCache = useRef({})
+
+  const cleanupFile = useCallback((id) => {
+    const fileData = fileDataCache.current[id]
+    if (fileData?.dataUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(fileData.dataUrl)
+    }
+    delete fileDataCache.current[id]
+
+    const pdfDoc = pdfDocumentCache.current[id]
+    if (pdfDoc?.destroy) {
+      try { pdfDoc.destroy() } catch (e) { console.warn("PDF cleanup warning:", e) }
+    }
+    delete pdfDocumentCache.current[id]
+  }, [])
+
+  const cleanupAll = useCallback(() => {
+    Object.values(fileDataCache.current).forEach(data => {
+      if (data.dataUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(data.dataUrl)
+      }
+    })
+  }, [])
+
+  return { fileDataCache, pdfDocumentCache, cleanupFile, cleanupAll }
+}
+
+const usePasswordProtection = () => {
+  const [passwordProtectedFiles, setPasswordProtectedFiles] = useState(new Set())
+
+  const checkPasswordProtection = useCallback(async (file, id) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+
+      const loadingTask = pdfjs.getDocument({ data: uint8Array, password: "" })
+      await loadingTask.promise
+      return false
+    } catch (error) {
+      if (isPasswordError(error)) {
+        setPasswordProtectedFiles(prev => new Set([...prev, id]))
+        return true
+      }
+      return false
+    }
+  }, [])
+
+  const removePasswordProtected = useCallback((id) => {
+    setPasswordProtectedFiles(prev => {
+      const newSet = new Set(prev)
+      newSet.delete(id)
+      return newSet
+    })
+  }, [])
+
+  return { passwordProtectedFiles, checkPasswordProtection, removePasswordProtected }
+}
+
+const useDragAndDrop = (files, displayOrder, setDisplayOrder, pdfHealthCheck) => {
+  const [draggedIndex, setDraggedIndex] = useState(null)
+  const [dragOverIndex, setDragOverIndex] = useState(null)
+
+  const handleDragStart = useCallback((e, index) => {
+    setDraggedIndex(index)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', index.toString())
+  }, [])
+
+  const handleDragOver = useCallback((e, index) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (draggedIndex !== null && draggedIndex !== index) {
+      setDragOverIndex(index)
+    }
+  }, [draggedIndex])
+
+  const handleDragLeave = useCallback((e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setDragOverIndex(null)
+    }
+  }, [])
+
+  const handleDrop = useCallback((e, dropIndex) => {
+    e.preventDefault()
+
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDragOverIndex(null)
+      setDraggedIndex(null)
+      return
+    }
+
+    const draggedFile = files[displayOrder[draggedIndex]]
+    const dropFile = files[displayOrder[dropIndex]]
+
+    if (draggedFile && dropFile) {
+      const draggedHealthy = pdfHealthCheck[draggedFile.id] !== false
+      const dropHealthy = pdfHealthCheck[dropFile.id] !== false
+
+      if (!draggedHealthy || !dropHealthy) {
+        console.warn('Skipping drop - one or both files not healthy')
+        setDragOverIndex(null)
+        setDraggedIndex(null)
+        return
+      }
+    }
+
+    setDisplayOrder(currentOrder => {
+      const newOrder = [...currentOrder]
+      const [movedItem] = newOrder.splice(draggedIndex, 1)
+      newOrder.splice(dropIndex, 0, movedItem)
+      return newOrder
+    })
+
+    setDragOverIndex(null)
+    setDraggedIndex(null)
+  }, [draggedIndex, files, displayOrder, pdfHealthCheck, setDisplayOrder])
+
+  const handleDragEnd = useCallback(() => {
+    setDragOverIndex(null)
+    setDraggedIndex(null)
+  }, [])
+
+  return {
+    draggedIndex,
+    dragOverIndex,
+    handleDragStart,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+    handleDragEnd
+  }
+}
+
+// Components
+const PasswordProtectedPreview = () => (
+  <div className="w-full h-full bg-gray-50 flex flex-col items-center justify-center rounded-lg relative">
+    <div className="absolute top-2 left-2 bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-medium">
+      Password required
+    </div>
+    <IoMdLock className="text-4xl text-gray-600 mb-2" />
+    <div className="flex items-center gap-1 bg-black rounded-full py-1 px-2">
+      {[...Array(4)].map((_, i) => (
+        <div key={i} className="w-1 h-1 bg-white rounded-full" />
+      ))}
+    </div>
+  </div>
+)
+
+const GenericPreview = ({ file, isHealthy }) => (
+  <div className="w-full h-full bg-gray-50 flex items-center justify-center rounded-lg">
+    <FileText className="w-16 h-16 text-gray-400" />
+    <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">PDF</div>
+    {!isHealthy && (
+      <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+        Preview Issue
+      </div>
+    )}
+  </div>
+)
+
+const PDFDocumentPreview = memo(({ file, rotation, isLoading, onLoadSuccess, onLoadError }) => (
+  <div className="w-full h-full relative flex justify-center items-center bg-gray-100 rounded-lg">
+    {isLoading ? (
+      <RotateCw className="w-8 h-8 text-gray-400 animate-spin" />
+    ) : (
+      <Document
+        key={`pdf-${file.id}-${rotation}`}
+        file={file.stableData.dataUrl}
+        onLoadSuccess={onLoadSuccess}
+        onLoadError={onLoadError}
+        loading={<RotateCw className="w-8 h-8 text-gray-400 animate-spin" />}
+        error={
+          <div className="w-full h-full bg-red-50 flex flex-col items-center justify-center rounded-lg p-4">
+            <FileText className="w-12 h-12 text-red-400 mb-2" />
+            <div className="text-sm text-red-600 font-medium text-center">Could not load preview</div>
+          </div>
+        }
+        options={{
+          cMapUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+          cMapPacked: true,
+          standardFontDataUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+        }}
+      >
+        <div style={{ transform: `rotate(${rotation}deg)` }}>
+          <Page
+            pageNumber={1}
+            width={180}
+            renderTextLayer={false}
+            renderAnnotationLayer={false}
+            className="border border-gray-200 shadow-sm"
+            loading={
+              <div className="w-[180px] h-[240px] bg-gray-100 flex items-center justify-center">
+                <RotateCw className="w-6 h-6 text-gray-400 animate-spin" />
+              </div>
+            }
+          />
+        </div>
+      </Document>
+    )}
+  </div>
+))
+
+const PDFPreview = memo(({
+  file, rotation, isLoading, onLoadSuccess, onLoadError, onRotate, onRemove,
+  displayIndex, isHealthy, isDragging, isDragOver, isPasswordProtected
+}) => {
+  const [isVisible, setIsVisible] = useState(false)
+  const [hasError, setHasError] = useState(false)
+  const elementRef = useRef(null)
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => entry.isIntersecting && setIsVisible(true),
+      { threshold: 0.1, rootMargin: '50px' }
+    )
+
+    if (elementRef.current) observer.observe(elementRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  const handleLoadError = useCallback((error) => {
+    setHasError(true)
+    onLoadError(error, file.id)
+  }, [file.id, onLoadError])
+
+  const handleLoadSuccess = useCallback((pdf) => {
+    setHasError(false)
+    onLoadSuccess(pdf, file.id)
+  }, [file.id, onLoadSuccess])
+
+  const renderPreview = () => {
+    if (isPasswordProtected) return <PasswordProtectedPreview />
+    if (!isVisible || hasError || !isHealthy) {
+      return <GenericPreview file={file} isHealthy={isHealthy} />
+    }
+    if (file.type === "application/pdf" && file.stableData) {
+      return <PDFDocumentPreview
+        file={file}
+        rotation={rotation}
+        isLoading={isLoading}
+        onLoadSuccess={handleLoadSuccess}
+        onLoadError={handleLoadError}
+      />
+    }
+    return <GenericPreview file={file} isHealthy={isHealthy} />
+  }
+
+  const borderClasses = isPasswordProtected
+    ? "border-yellow-300 bg-yellow-50"
+    : isDragOver
+      ? "border-blue-500 bg-blue-50 scale-105 shadow-lg"
+      : isDragging
+        ? "border-red-500 opacity-50"
+        : isHealthy
+          ? "border-gray-200 hover:border-red-300 hover:shadow-lg"
+          : "border-yellow-300 bg-yellow-50"
+
+  return (
+    <div
+      ref={elementRef}
+      className={`bg-white rounded-xl border-2 transition-all duration-200 overflow-hidden relative cursor-grab active:cursor-grabbing ${borderClasses}`}
+    >
+      <div className="relative h-56 p-3 pt-10">
+        <div className="w-full h-full relative overflow-hidden rounded-lg">{renderPreview()}</div>
+
+        <div className="absolute top-1 right-2 flex gap-1 z-30">
+          <button
+            onClick={(e) => { e.stopPropagation(); onRotate(file.id) }}
+            disabled={!isHealthy || isPasswordProtected}
+            className={`w-8 h-8 border bg-white/90 hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110 ${(!isHealthy || isPasswordProtected) ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+            title={isPasswordProtected ? "Cannot rotate - Password required" : !isHealthy ? "Cannot rotate - PDF issue" : "Rotate file"}
+          >
+            <RotateCw className="w-4 h-4 text-gray-600" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove(file.id) }}
+            className="w-8 h-8 bg-white/90 border hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110"
+            title="Remove file"
+          >
+            <X className="w-4 h-4 text-red-500" />
+          </button>
+        </div>
+
+        {!isPasswordProtected && (
+          <div className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity duration-200 flex items-center justify-center pointer-events-none">
+            <div className={`bg-black/30 text-white rounded-full p-2 ${!isHealthy ? 'bg-yellow-500/30' : ''}`}>
+              <Move className="w-5 h-5" />
+            </div>
+          </div>
+        )}
+
+        <div className="absolute top-2 left-2 bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-medium">
+          {displayIndex + 1}
+        </div>
+      </div>
+
+      <div className="p-3 bg-gray-50 h-20 flex flex-col justify-between">
+        <div>
+          <p className="text-sm font-medium text-gray-900 truncate" title={file.name}>{file.name}</p>
+          <p className="text-xs text-gray-500 mt-1">{file.size}</p>
+        </div>
+      </div>
+    </div>
+  )
+})
+
+const FileInfoSection = ({ files, totalSize }) => (
+  <div className="mb-6">
+    <h4 className="font-semibold text-blue-900 mb-3">File Information</h4>
+    <div className="space-y-2 text-sm">
+      {[
+        ["Files selected:", files.length],
+        ["Total size:", `${totalSize} MB`],
+        ["Output format:", "Merged PDF"]
+      ].map(([label, value]) => (
+        <div key={label} className="flex items-center justify-between">
+          <span className="text-blue-700">{label}</span>
+          <span className="font-semibold text-blue-900">{value}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+)
+
+const LimitsExceeded = ({ limitsExceeded, files, totalSize }) => (
+  <div className="bg-white rounded-xl border-2 border-red-200 p-4">
+    <h4 className="font-semibold text-red-600 mb-3 text-center">Limits Exceeded</h4>
+    <div className="space-y-2 text-sm">
+      {limitsExceeded.exceedsFiles && (
+        <div className="flex items-center justify-between">
+          <span className="text-gray-600">Files:</span>
+          <span className="font-semibold text-red-600">{files.length} / {LIMITS.MAX_FILES}</span>
+        </div>
+      )}
+      {limitsExceeded.exceedsSize && (
+        <div className="flex items-center justify-between">
+          <span className="text-gray-600">Total size:</span>
+          <span className="font-semibold text-red-600">{totalSize} / {LIMITS.MAX_SIZE_MB} MB</span>
+        </div>
+      )}
+    </div>
+    <p className="text-xs text-red-600 text-center mt-3">Please reduce files or size to continue.</p>
+  </div>
+)
+
+const Sidebar = ({ files, totalSize, hasUnhealthyFiles, passwordProtectedFiles, limitsExceeded, onMerge }) => (
+  <div className="flex-1 flex flex-col overflow-y-auto custom-scrollbar">
+    <div className="p-6 flex-1">
+      <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">Merge PDF</h3>
+
+      <div className="bg-blue-50 rounded-xl p-4 mb-6">
+        <p className="text-sm text-blue-800">
+          Drag any file to reorder. The files will merge in the order shown. Works with 15 files.
+        </p>
+      </div>
+
+      {hasUnhealthyFiles && (
+        <div className="bg-yellow-50 rounded-xl p-4 mb-6">
+          <p className="text-sm text-yellow-800">
+            Some files have preview issues but can still be merged. Check the yellow-highlighted files.
+          </p>
+        </div>
+      )}
+
+      {passwordProtectedFiles.size > 0 && (
+        <div className="bg-yellow-50 rounded-xl p-4 mb-6">
+          <p className="text-sm text-yellow-800">
+            {passwordProtectedFiles.size} password-protected file{passwordProtectedFiles.size > 1 ? "s" : ""} detected. Passwords will be required for merging.
+          </p>
+        </div>
+      )}
+
+      {files.length > 0 && <FileInfoSection files={files} totalSize={totalSize} />}
+    </div>
+
+    <div className="flex-shrink-0 px-6 py-6 pb-4 border-t bg-white sticky bottom-4">
+      {!limitsExceeded.hasAnyExceeded ? (
+        <button
+          onClick={onMerge}
+          disabled={files.length < LIMITS.MIN_FILES}
+          className={`w-full py-3 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${files.length >= LIMITS.MIN_FILES
+            ? "bg-blue-600 hover:bg-blue-700 hover:scale-105 shadow-lg"
+            : "bg-gray-300 cursor-not-allowed"
+            }`}
+        >
+          Merge PDF <ArrowRight className="w-5 h-5" />
+        </button>
+      ) : (
+        <LimitsExceeded limitsExceeded={limitsExceeded} files={files} totalSize={totalSize} />
+      )}
+
+      {files.length < LIMITS.MIN_FILES && (
+        <p className="text-xs text-gray-500 text-center mt-2">
+          Select at least {LIMITS.MIN_FILES} PDF files to merge
+        </p>
+      )}
+    </div>
+  </div>
+)
+
+// Main Component
+export default function MergePDFPage() {
+  const [files, setFiles] = useState([])
+  const [displayOrder, setDisplayOrder] = useState([])
+  const [isDragOver, setIsDragOver] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [fileRotations, setFileRotations] = useState({})
+  const [pdfPages, setPdfPages] = useState({})
+  const [loadingPdfs, setLoadingPdfs] = useState(new Set())
+  const [pdfHealthCheck, setPdfHealthCheck] = useState({})
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+
+  const { fileDataCache, pdfDocumentCache, cleanupFile, cleanupAll } = useFileCache()
+  const { passwordProtectedFiles, checkPasswordProtection, removePasswordProtected } = usePasswordProtection()
+  const dragProps = useDragAndDrop(files, displayOrder, setDisplayOrder, pdfHealthCheck)
+  const fileRefs = useRef({})
+  const router = useRouter()
+
+  // Initialize display order when files change
+  useEffect(() => {
+    if (files.length > 0 && displayOrder.length !== files.length) {
+      setDisplayOrder(files.map((_, index) => index))
+    }
+  }, [files.length, displayOrder.length])
+
+  const checkPdfHealth = useCallback((fileId) => {
+    const element = fileRefs.current[fileId]
+    if (!element) return false
+
+    try {
+      const pdfDoc = element.querySelector('.react-pdf__Document')
+      if (pdfDoc && pdfDoc._pdfDocument) {
+        const doc = pdfDoc._pdfDocument
+        return doc && !doc.destroyed && doc.loadingTask && !doc.loadingTask.destroyed
+      }
+    } catch (error) {
+      console.warn(`PDF health check failed for ${fileId}:`, error)
+      return false
+    }
+    return true
+  }, [])
+
+  const createStableFileData = useCallback(async (file, id) => {
+    if (fileDataCache.current[id]) return fileDataCache.current[id]
+
+    try {
+      const isPasswordProtected = await checkPasswordProtection(file, id)
+      if (isPasswordProtected) {
+        const stableData = { blob: null, dataUrl: null, uint8Array: null, isPasswordProtected: true }
+        fileDataCache.current[id] = stableData
+        return stableData
+      }
+
+      const arrayBuffer = await file.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      const blob = new Blob([uint8Array], { type: file.type })
+      const objectUrl = URL.createObjectURL(blob)
+
+      const stableData = { blob, dataUrl: objectUrl, uint8Array: uint8Array.slice(), isPasswordProtected: false }
+      fileDataCache.current[id] = stableData
+      return stableData
+    } catch (error) {
+      console.error('Error creating stable file data:', error)
+      return null
+    }
+  }, [fileDataCache, checkPasswordProtection])
+
+  const handleFiles = useCallback(async (newFiles) => {
+    const batchSize = 5
+    const fileObjects = []
+
+    for (let i = 0; i < newFiles.length; i += batchSize) {
+      const batch = newFiles.slice(i, i + batchSize)
+      const batchPromises = batch.map(async (file, index) => {
+        const id = createFileId(i + index)
+        const stableData = await createStableFileData(file, id)
+        return {
+          id, file, name: file.name, size: formatFileSize(file.size), type: file.type, stableData
+        }
+      })
+
+      const batchResults = await Promise.all(batchPromises)
+      fileObjects.push(...batchResults)
+    }
+
+    setFiles(prev => [...prev, ...fileObjects])
+  }, [createStableFileData])
+
+  const removeFile = useCallback((id) => {
+    cleanupFile(id)
+    removePasswordProtected(id)
+
+    setLoadingPdfs(prev => { const newSet = new Set(prev); newSet.delete(id); return newSet })
+    setPdfHealthCheck(prev => { const { [id]: removed, ...rest } = prev; return rest })
+    setFiles(prev => {
+      const newFiles = prev.filter(file => file.id !== id)
+      setDisplayOrder(newFiles.map((_, index) => index))
+      return newFiles
+    })
+    setFileRotations(prev => { const { [id]: removed, ...rest } = prev; return rest })
+    setPdfPages(prev => { const { [id]: removed, ...rest } = prev; return rest })
+  }, [cleanupFile, removePasswordProtected])
+
+  const rotateFile = useCallback((id) => {
+    if (!checkPdfHealth(id) || passwordProtectedFiles.has(id)) {
+      console.warn('Skipping rotation - PDF not healthy or password protected')
+      return
+    }
+    setFileRotations(prev => ({ ...prev, [id]: ((prev[id] || 0) + 90) % 360 }))
+  }, [checkPdfHealth, passwordProtectedFiles])
+
+  const sortFilesByName = useCallback((order = "asc") => {
+    setFiles(prev => {
+      const sorted = [...prev].sort((a, b) =>
+        order === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)
+      )
+      setDisplayOrder(sorted.map((_, index) => index))
+      return sorted
+    })
+  }, [])
+
+  const onDocumentLoadSuccess = useCallback((pdf, fileId) => {
+    setLoadingPdfs(prev => { const newSet = new Set(prev); newSet.delete(fileId); return newSet })
+    setPdfPages(prev => ({ ...prev, [fileId]: pdf.numPages }))
+    pdfDocumentCache.current[fileId] = pdf
+    setPdfHealthCheck(prev => ({ ...prev, [fileId]: true }))
+  }, [pdfDocumentCache])
+
+  const onDocumentLoadError = useCallback((error, fileId) => {
+    console.warn(`PDF load error for file ${fileId}:`, error)
+    setLoadingPdfs(prev => { const newSet = new Set(prev); newSet.delete(fileId); return newSet })
+    setPdfHealthCheck(prev => ({ ...prev, [fileId]: false }))
+  }, [])
+
+  const handlePasswordSubmit = useCallback(async (passwords) => {
+    const orderedFiles = displayOrder.map(index => files[index])
+    setIsUploading(true)
+    setUploadProgress(0)
+
+    try {
+      const formData = new FormData()
+      orderedFiles.forEach(file => formData.append('files', file.file))
+
+      const filePasswords = {}
+      orderedFiles.forEach(file => {
+        if (passwordProtectedFiles.has(file.id)) {
+          filePasswords[file.name] = passwords[file.id] || ""
+        }
+      })
+      formData.append('passwords', JSON.stringify(filePasswords))
+
+      const rotations = {}
+      orderedFiles.forEach(file => {
+        rotations[file.name] = fileRotations[file.id] || 0
+      })
+      formData.append('rotations', JSON.stringify(rotations))
+
+      const response = await Api.post('/tools/merge', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          setUploadProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total))
+        }
+      })
+
+      if (response.data) {
+        const encodedPath = encodeURIComponent(response.data.data.fileUrl)
+        const downloadUrl = `/downloads/document=${encodedPath}?dbTaskId=${response.data.data.dbTaskId}&tool-type=merge-pdf`
+        router.push(downloadUrl)
+      } else {
+        toast.error('No merged file received from server')
+      }
+    } catch (error) {
+      console.error('Merge error:', error)
+      toast.error(error?.response?.data?.message || 'Error merging files')
+    } finally {
+      setIsUploading(false)
+    }
+  }, [files, displayOrder, fileRotations, passwordProtectedFiles, router])
+
+  const handleMerge = useCallback(async () => {
+    if (files.length < LIMITS.MIN_FILES) return
+
+    const currentProtectedFiles = files.filter(file => passwordProtectedFiles.has(file.id))
+    if (currentProtectedFiles.length > 0) {
+      setShowPasswordModal(true)
+      return
+    }
+    await handlePasswordSubmit({})
+  }, [files, passwordProtectedFiles, handlePasswordSubmit])
+
+  // Computed values
+  const orderedFiles = useMemo(() =>
+    displayOrder.map(index => files[index]).filter(Boolean),
+    [displayOrder, files]
+  )
+
+  const totalSize = useMemo(() =>
+    files.reduce((total, file) => total + parseFloat(file.size), 0).toFixed(2),
+    [files]
+  )
+
+  const limitsExceeded = useMemo(() => {
+    const exceedsFiles = files.length > LIMITS.MAX_FILES
+    const exceedsSize = parseFloat(totalSize) > LIMITS.MAX_SIZE_MB
+    return { exceedsFiles, exceedsSize, hasAnyExceeded: exceedsFiles || exceedsSize }
+  }, [files.length, totalSize])
+
+  const hasUnhealthyFiles = useMemo(() =>
+    Object.values(pdfHealthCheck).some(health => health === false),
+    [pdfHealthCheck]
+  )
+
+  const protectedFilesForModal = useMemo(() =>
+    files.filter(file => passwordProtectedFiles.has(file.id)),
+    [files, passwordProtectedFiles]
+  )
+
+  const SafeFileUploader = ({ whiletap, whileHover, animate, initial, ...safeProps }) => <FileUploader {...safeProps} />
+
+  useEffect(() => {
+    return cleanupAll
+  }, [cleanupAll])
+
+  if (isUploading) return <ProgressScreen uploadProgress={uploadProgress} />
+
+  if (files.length === 0) {
+    return (
+      <SafeFileUploader
+        isMultiple={true}
+        onFilesSelect={handleFiles}
+        isDragOver={isDragOver}
+        setIsDragOver={setIsDragOver}
+        allowedTypes={[".pdf"]}
+        showFiles={false}
+        uploadButtonText="Select PDF files"
+        pageTitle="Merge PDF files"
+        pageSubTitle="Combine PDFs in the order you want with the easiest PDF merger available."
+        maxFiles={LIMITS.MAX_FILES}
+        maxSize={LIMITS.MAX_SIZE_MB}
+      />
+    )
+  }
+
+  const sidebarProps = {
+    files, totalSize, hasUnhealthyFiles, passwordProtectedFiles, limitsExceeded, onMerge: handleMerge
+  }
+
+  return (
+    <div className="h-full">
+      <div className="grid grid-cols-1 md:grid-cols-10 border h-[100%]">
+        {/* Main Content */}
+        <div className="p-4 md:col-span-7 bg-gray-50 overflow-y-auto custom-scrollbar">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">Selected Files ({files.length})</h2>
+            <SafeFileUploader
+              isMultiple={true}
+              onFilesSelect={handleFiles}
+              isDragOver={isDragOver}
+              setIsDragOver={setIsDragOver}
+              allowedTypes={[".pdf"]}
+              showFiles={true}
+              onSort={sortFilesByName}
+              selectedCount={files?.length}
+              pageTitle="Merge PDF files"
+              pageSubTitle="Combine PDFs in the order you want with the easiest PDF merger available."
+              maxFiles={LIMITS.MAX_FILES}
+              maxSize={LIMITS.MAX_SIZE_MB}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {orderedFiles.map((file, displayIndex) => (
+              <div
+                key={`${file.id}-${displayIndex}`}
+                ref={(el) => (fileRefs.current[file.id] = el)}
+                draggable="true"
+                onDragStart={(e) => dragProps.handleDragStart(e, displayIndex)}
+                onDragOver={(e) => dragProps.handleDragOver(e, displayIndex)}
+                onDragLeave={dragProps.handleDragLeave}
+                onDrop={(e) => dragProps.handleDrop(e, displayIndex)}
+                onDragEnd={dragProps.handleDragEnd}
+              >
+                <PDFPreview
+                  file={file}
+                  rotation={fileRotations[file.id] || 0}
+                  isLoading={loadingPdfs.has(file.id)}
+                  onLoadSuccess={onDocumentLoadSuccess}
+                  onLoadError={onDocumentLoadError}
+                  onRotate={rotateFile}
+                  onRemove={removeFile}
+                  displayIndex={displayIndex}
+                  isHealthy={pdfHealthCheck[file.id] !== false}
+                  isDragging={dragProps.draggedIndex === displayIndex}
+                  isDragOver={dragProps.dragOverIndex === displayIndex}
+                  isPasswordProtected={passwordProtectedFiles.has(file.id)}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Desktop Sidebar */}
+        <div className="hidden md:flex md:col-span-3 flex-col bg-white border-l h-[calc(100vh-50px)]">
+          <Sidebar {...sidebarProps} />
+        </div>
+
+        {/* Mobile Sidebar Overlay */}
+        {showMobileSidebar && (
+          <div className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-50" onClick={() => setShowMobileSidebar(false)}>
+            <div className="absolute right-0 top-0 h-full w-80 bg-white shadow-xl overflow-y-auto custom-scrollbar pb-16" onClick={(e) => e.stopPropagation()}>
+              <div className="p-4 border-b flex items-center justify-between">
+                <h3 className="text-xl font-bold text-gray-900">Merge PDF</h3>
+                <button onClick={() => setShowMobileSidebar(false)} className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center">
+                  <X className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
+              <div className="p-4">
+                <div className="bg-blue-50 rounded-xl p-4 mb-6">
+                  <p className="text-sm text-blue-800">
+                    Drag any file to reorder. The files will merge in the order shown. Works with 15 files.
+                  </p>
+                </div>
+                {passwordProtectedFiles.size > 0 && (
+                  <div className="bg-yellow-50 rounded-xl p-4 mb-6">
+                    <p className="text-sm text-yellow-800">
+                      {passwordProtectedFiles.size} password-protected file{passwordProtectedFiles.size > 1 ? "s" : ""} detected. Passwords will be required for merging.
+                    </p>
+                  </div>
+                )}
+                {files.length > 0 && <FileInfoSection files={files} totalSize={totalSize} />}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Footer */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-50">
+          <div className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                {!limitsExceeded.hasAnyExceeded ? (
+                  <button
+                    onClick={handleMerge}
+                    disabled={files.length < LIMITS.MIN_FILES}
+                    className={`w-full py-3 px-4 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${files.length >= LIMITS.MIN_FILES ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 cursor-not-allowed"
+                      }`}
+                  >
+                    Merge PDF <ArrowRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <div className="bg-red-50 rounded-xl p-3 text-center">
+                    <p className="text-sm text-red-600 font-medium">Limits exceeded!</p>
+                    <p className="text-xs text-red-500 mt-1">Reduce files or size to continue</p>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setShowMobileSidebar(true)}
+                className="flex-shrink-0 w-12 h-12 bg-blue-100 hover:bg-blue-200 rounded-xl flex items-center justify-center transition-all duration-200"
+              >
+                <Settings className="w-5 h-5 text-blue-600" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <PasswordModal
+          isOpen={showPasswordModal}
+          onClose={() => setShowPasswordModal(false)}
+          passwordProtectedFiles={protectedFilesForModal}
+          onSubmit={handlePasswordSubmit}
+        />
+      </div>
+    </div>
+  )
+}
+
+// "use client"
+
+// import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react"
+// import { useRouter } from "next/navigation"
+// import { FileText, X, ArrowRight, RotateCw, Move } from "lucide-react"
+// import { Document, Page, pdfjs } from "react-pdf"
+// import ProgressScreen from "@/components/tools/ProgressScreen"
+// import FileUploader from "@/components/tools/FileUploader"
+// import Api from "@/utils/Api"
+// import { toast } from "react-toastify"
+
+// // PDF.js worker setup
+// pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+// // Memoized PDF Preview Component
+// const PDFPreview = memo(({ file, rotation, isLoading, onLoadSuccess, onLoadError, onRotate, onRemove, displayIndex, isHealthy, isDragging, isDragOver }) => {
+//   const [isVisible, setIsVisible] = useState(false)
+//   const [hasError, setHasError] = useState(false)
+//   const elementRef = useRef(null)
+
+//   // Intersection Observer for lazy loading
+//   useEffect(() => {
+//     const observer = new IntersectionObserver(
+//       ([entry]) => {
+//         if (entry.isIntersecting) {
+//           setIsVisible(true)
+//         }
+//       },
+//       {
+//         threshold: 0.1,
+//         rootMargin: '50px'
+//       }
+//     )
+
+//     if (elementRef.current) {
+//       observer.observe(elementRef.current)
+//     }
+
+//     return () => observer.disconnect()
+//   }, [])
+
+//   const handleLoadError = useCallback((error) => {
+//     setHasError(true)
+//     onLoadError(error, file.id)
+//   }, [file.id, onLoadError])
+
+//   const handleLoadSuccess = useCallback((pdf) => {
+//     setHasError(false)
+//     onLoadSuccess(pdf, file.id)
+//   }, [file.id, onLoadSuccess])
+
+//   const renderPreview = () => {
+//     if (!isVisible || hasError || !isHealthy) {
+//       return (
+//         <div className="w-full h-full bg-gray-50 flex items-center justify-center rounded-lg">
+//           <FileText className="w-16 h-16 text-gray-400" />
+//           <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+//             PDF
+//           </div>
+//           {!isHealthy && (
+//             <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+//               Preview Issue
+//             </div>
+//           )}
+//         </div>
+//       )
+//     }
+
+//     if (file.type === "application/pdf" && file.stableData) {
+//       return (
+//         <div className="w-full h-full relative flex justify-center items-center bg-gray-100 rounded-lg">
+//           {!isLoading ? (
+//             <Document
+//               key={`pdf-${file.id}-${rotation}`}
+//               file={file.stableData.dataUrl}
+//               onLoadSuccess={handleLoadSuccess}
+//               onLoadError={handleLoadError}
+//               loading={
+//                 <div className="flex items-center justify-center">
+//                   <RotateCw className="w-8 h-8 text-gray-400 animate-spin" />
+//                 </div>
+//               }
+//               error={
+//                 <div className="w-full h-full bg-red-50 flex flex-col items-center justify-center rounded-lg p-4">
+//                   <FileText className="w-12 h-12 text-red-400 mb-2" />
+//                   <div className="text-sm text-red-600 font-medium text-center">
+//                     Could not load preview
+//                   </div>
+//                 </div>
+//               }
+//               className="w-full h-full flex items-center justify-center border"
+//               options={{
+//                 // Reduce quality for better performance
+//                 cMapUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+//                 cMapPacked: true,
+//                 standardFontDataUrl: `//unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+//               }}
+//             >
+//               <div style={{ transform: `rotate(${rotation}deg)` }}>
+//                 <Page
+//                   pageNumber={1}
+//                   width={180}
+//                   renderTextLayer={false}
+//                   renderAnnotationLayer={false}
+//                   className="border border-gray-200 shadow-sm"
+//                   loading={
+//                     <div className="w-[180px] h-[240px] bg-gray-100 flex items-center justify-center">
+//                       <RotateCw className="w-6 h-6 text-gray-400 animate-spin" />
+//                     </div>
+//                   }
+//                 />
+//               </div>
+//             </Document>
+//           ) : (
+//             <div className="flex items-center justify-center">
+//               <RotateCw className="w-8 h-8 text-gray-400 animate-spin" />
+//             </div>
+//           )}
+//         </div>
+//       )
+//     }
+
+//     return (
+//       <div className="w-full h-full bg-gray-50 flex items-center justify-center rounded-lg">
+//         <FileText className="w-16 h-16 text-gray-400" />
+//         <div className="absolute bottom-2 left-2 text-xs text-gray-600 font-semibold">
+//           {file.type.split('/')[1]?.toUpperCase() || 'FILE'}
+//         </div>
+//       </div>
+//     )
+//   }
+
+//   return (
+//     <div
+//       ref={elementRef}
+//       className={`bg-white rounded-xl border-2 transition-all duration-200 overflow-hidden relative cursor-grab active:cursor-grabbing ${isDragOver
+//           ? "border-blue-500 bg-blue-50 scale-105 shadow-lg"
+//           : isDragging
+//             ? "border-red-500 opacity-50"
+//             : isHealthy
+//               ? "border-gray-200 hover:border-red-300 hover:shadow-lg"
+//               : "border-yellow-300 bg-yellow-50"
+//         }`}
+//     >
+//       {/* File Preview Area */}
+//       <div className="relative h-56 p-3 pt-10">
+//         <div className="w-full h-full relative overflow-hidden rounded-lg">
+//           {renderPreview()}
+//         </div>
+
+//         {/* Action Buttons */}
+//         <div className="absolute top-1 right-2 flex gap-1 z-30">
+//           <button
+//             onClick={(e) => {
+//               e.stopPropagation()
+//               onRotate(file.id)
+//             }}
+//             disabled={!isHealthy}
+//             className={`w-8 h-8 border bg-white/90 hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110 ${!isHealthy ? 'opacity-50 cursor-not-allowed' : ''
+//               }`}
+//             title={isHealthy ? "Rotate file" : "Cannot rotate - PDF issue"}
+//           >
+//             <RotateCw className="w-4 h-4 text-gray-600" />
+//           </button>
+//           <button
+//             onClick={(e) => {
+//               e.stopPropagation()
+//               onRemove(file.id)
+//             }}
+//             className="w-8 h-8 bg-white/90 border hover:bg-white rounded-full flex items-center justify-center shadow-md transition-all duration-200 hover:scale-110"
+//             title="Remove file"
+//           >
+//             <X className="w-4 h-4 text-red-500" />
+//           </button>
+//         </div>
+
+//         {/* Drag Handle */}
+//         <div className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity duration-200 flex items-center justify-center pointer-events-none">
+//           <div className={`bg-black/30 text-white rounded-full p-2 ${!isHealthy ? 'bg-yellow-500/30' : ''}`}>
+//             <Move className="w-5 h-5" />
+//           </div>
+//         </div>
+
+//         {/* Position indicator */}
+//         <div className="absolute top-2 left-2 bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-medium">
+//           {displayIndex + 1}
+//         </div>
+//       </div>
+
+//       {/* File Info Footer */}
+//       <div className="p-3 bg-gray-50 h-20 flex flex-col justify-between">
+//         <div>
+//           <p className="text-sm font-medium text-gray-900 truncate" title={file.name}>
+//             {file.name}
+//           </p>
+//           <p className="text-xs text-gray-500 mt-1">{file.size}</p>
+//         </div>
+//       </div>
+//     </div>
+//   )
+// })
+
+// PDFPreview.displayName = 'PDFPreview'
+
+// export default function MergePDFPage() {
+//   const [files, setFiles] = useState([])
+//   const [displayOrder, setDisplayOrder] = useState([])
+//   const [isDragOver, setIsDragOver] = useState(false)
+//   const [isUploading, setIsUploading] = useState(false)
+//   const [uploadProgress, setUploadProgress] = useState(0)
+//   const [fileRotations, setFileRotations] = useState({})
+//   const [pdfPages, setPdfPages] = useState({})
+//   const [draggedIndex, setDraggedIndex] = useState(null)
+//   const [dragOverIndex, setDragOverIndex] = useState(null)
+//   const [loadingPdfs, setLoadingPdfs] = useState(new Set())
+//   const [pdfHealthCheck, setPdfHealthCheck] = useState({})
+
+//   const fileRefs = useRef({})
+//   const fileDataCache = useRef({})
+//   const pdfDocumentCache = useRef({})
+//   const router = useRouter()
+
+//   // Initialize display order when files change
+//   useEffect(() => {
+//     if (files.length > 0 && displayOrder.length !== files.length) {
+//       setDisplayOrder(files.map((_, index) => index))
+//     }
+//   }, [files.length, displayOrder.length])
+
+//   // Optimized PDF Health Check - throttled
+//   const checkPdfHealth = useCallback((fileId) => {
+//     const element = fileRefs.current[fileId]
+//     if (!element) return false
+
+//     try {
+//       const pdfDoc = element.querySelector('.react-pdf__Document')
+//       if (pdfDoc && pdfDoc._pdfDocument) {
+//         const doc = pdfDoc._pdfDocument
+//         return doc && !doc.destroyed && doc.loadingTask && !doc.loadingTask.destroyed
+//       }
+//     } catch (error) {
+//       console.warn(`PDF health check failed for ${fileId}:`, error)
+//       return false
+//     }
+//     return true
+//   }, [])
+
+//   // Optimized file data creation with caching
+//   const createStableFileData = useCallback(async (file, id) => {
+//     if (fileDataCache.current[id]) {
+//       return fileDataCache.current[id]
+//     }
+
+//     try {
+//       // Use smaller chunks for large files
+//       const arrayBuffer = await file.arrayBuffer()
+//       const uint8Array = new Uint8Array(arrayBuffer)
+
+//       // Create blob without copying data
+//       const blob = new Blob([uint8Array], { type: file.type })
+
+//       // Use createObjectURL instead of data URL for better performance
+//       const objectUrl = URL.createObjectURL(blob)
+
+//       const stableData = {
+//         blob,
+//         dataUrl: objectUrl, // Using object URL instead of data URL
+//         uint8Array: uint8Array.slice(),
+//       }
+
+//       fileDataCache.current[id] = stableData
+//       return stableData
+//     } catch (error) {
+//       console.error('Error creating stable file data:', error)
+//       return null
+//     }
+//   }, [])
+
+//   // Optimized file handling with batching
+//   const handleFiles = useCallback(async (newFiles) => {
+//     const batchSize = 5 // Process files in batches
+//     const fileObjects = []
+
+//     for (let i = 0; i < newFiles.length; i += batchSize) {
+//       const batch = newFiles.slice(i, i + batchSize)
+//       const batchPromises = batch.map(async (file, index) => {
+//         const id = Date.now() + i + index + Math.random()
+//         const stableData = await createStableFileData(file, id)
+
+//         return {
+//           id,
+//           file,
+//           name: file.name,
+//           size: (file.size / 1024 / 1024).toFixed(2) + " MB",
+//           type: file.type,
+//           stableData,
+//         }
+//       })
+
+//       const batchResults = await Promise.all(batchPromises)
+//       fileObjects.push(...batchResults)
+//     }
+
+//     setFiles((prev) => [...prev, ...fileObjects])
+//   }, [createStableFileData])
+
+//   // Optimized remove function with cleanup
+//   const removeFile = useCallback((id) => {
+//     // Clean up URL object
+//     const fileData = fileDataCache.current[id]
+//     if (fileData && fileData.dataUrl && fileData.dataUrl.startsWith('blob:')) {
+//       URL.revokeObjectURL(fileData.dataUrl)
+//     }
+
+//     // Clean up all other references
+//     setLoadingPdfs((prev) => {
+//       const newSet = new Set(prev)
+//       newSet.delete(id)
+//       return newSet
+//     })
+
+//     delete fileDataCache.current[id]
+
+//     if (pdfDocumentCache.current[id]) {
+//       try {
+//         if (pdfDocumentCache.current[id].destroy) {
+//           pdfDocumentCache.current[id].destroy()
+//         }
+//       } catch (e) {
+//         console.warn('PDF cleanup warning:', e)
+//       }
+//       delete pdfDocumentCache.current[id]
+//     }
+
+//     setPdfHealthCheck(prev => {
+//       const newHealth = { ...prev }
+//       delete newHealth[id]
+//       return newHealth
+//     })
+
+//     setFiles((prev) => {
+//       const newFiles = prev.filter((file) => file.id !== id)
+//       setDisplayOrder(newFiles.map((_, index) => index))
+//       return newFiles
+//     })
+
+//     setFileRotations((prev) => {
+//       const newRotations = { ...prev }
+//       delete newRotations[id]
+//       return newRotations
+//     })
+
+//     setPdfPages((prev) => {
+//       const newPages = { ...prev }
+//       delete newPages[id]
+//       return newPages
+//     })
+//   }, [])
+
+//   // Optimized rotate function
+//   const rotateFile = useCallback((id) => {
+//     if (!checkPdfHealth(id)) {
+//       console.warn('Skipping rotation - PDF not healthy')
+//       return
+//     }
+
+//     setFileRotations((prev) => ({
+//       ...prev,
+//       [id]: ((prev[id] || 0) + 90) % 360,
+//     }))
+//   }, [checkPdfHealth])
+
+//   // Optimized sort function
+//   const sortFilesByName = useCallback((order = "asc") => {
+//     setFiles((prev) => {
+//       const sorted = [...prev].sort((a, b) => {
+//         if (order === "asc") {
+//           return a.name.localeCompare(b.name)
+//         } else {
+//           return b.name.localeCompare(a.name)
+//         }
+//       })
+//       setDisplayOrder(sorted.map((_, index) => index))
+//       return sorted
+//     })
+//   }, [])
+
+//   // Optimized PDF load handlers
+//   const onDocumentLoadSuccess = useCallback((pdf, fileId) => {
+//     setLoadingPdfs((prev) => {
+//       const newSet = new Set(prev)
+//       newSet.delete(fileId)
+//       return newSet
+//     })
+
+//     setPdfPages((prev) => ({
+//       ...prev,
+//       [fileId]: pdf.numPages,
+//     }))
+
+//     pdfDocumentCache.current[fileId] = pdf
+
+//     setPdfHealthCheck(prev => ({
+//       ...prev,
+//       [fileId]: true
+//     }))
+//   }, [])
+
+//   const onDocumentLoadError = useCallback((error, fileId) => {
+//     console.warn(`PDF load error for file ${fileId}:`, error)
+
+//     setLoadingPdfs((prev) => {
+//       const newSet = new Set(prev)
+//       newSet.delete(fileId)
+//       return newSet
+//     })
+
+//     setPdfHealthCheck(prev => ({
+//       ...prev,
+//       [fileId]: false
+//     }))
+//   }, [])
+
+//   // Optimized drag handlers
+//   const handleDragStart = useCallback((e, index) => {
+//     setDraggedIndex(index)
+//     e.dataTransfer.effectAllowed = 'move'
+//     e.dataTransfer.setData('text/plain', index.toString())
+//   }, [])
+
+//   const handleDragOver = useCallback((e, index) => {
+//     e.preventDefault()
+//     e.dataTransfer.dropEffect = 'move'
+
+//     if (draggedIndex !== null && draggedIndex !== index) {
+//       setDragOverIndex(index)
+//     }
+//   }, [draggedIndex])
+
+//   const handleDragLeave = useCallback((e) => {
+//     if (!e.currentTarget.contains(e.relatedTarget)) {
+//       setDragOverIndex(null)
+//     }
+//   }, [])
+
+//   const handleDrop = useCallback((e, dropIndex) => {
+//     e.preventDefault()
+
+//     if (draggedIndex === null || draggedIndex === dropIndex) {
+//       setDragOverIndex(null)
+//       setDraggedIndex(null)
+//       return
+//     }
+
+//     const draggedFile = files[displayOrder[draggedIndex]]
+//     const dropFile = files[displayOrder[dropIndex]]
+
+//     if (draggedFile && dropFile) {
+//       const draggedHealthy = pdfHealthCheck[draggedFile.id] !== false
+//       const dropHealthy = pdfHealthCheck[dropFile.id] !== false
+
+//       if (!draggedHealthy || !dropHealthy) {
+//         console.warn('Skipping drop - one or both files not healthy')
+//         setDragOverIndex(null)
+//         setDraggedIndex(null)
+//         return
+//       }
+//     }
+
+//     setDisplayOrder(currentOrder => {
+//       const newOrder = [...currentOrder]
+//       const [movedItem] = newOrder.splice(draggedIndex, 1)
+//       newOrder.splice(dropIndex, 0, movedItem)
+//       return newOrder
+//     })
+
+//     setDragOverIndex(null)
+//     setDraggedIndex(null)
+//   }, [draggedIndex, files, displayOrder, pdfHealthCheck])
+
+//   const handleDragEnd = useCallback(() => {
+//     setDragOverIndex(null)
+//     setDraggedIndex(null)
+//   }, [])
+
+//   // Optimized merge function
+//   const handleMerge = useCallback(async () => {
+//     if (files.length < 2) return
+
+//     const orderedFiles = displayOrder.map(index => files[index])
+//     setIsUploading(true)
+//     setUploadProgress(0)
+
+//     try {
+//       const formData = new FormData()
+
+//       orderedFiles.forEach(file => {
+//         formData.append('files', file.file)
+//       })
+
+//       const rotations = {}
+//       orderedFiles.forEach(file => {
+//         rotations[file.name] = fileRotations[file.id] || 0
+//       })
+//       formData.append('rotations', JSON.stringify(rotations))
+
+//       const response = await Api.post('/tools/merge', formData, {
+//         headers: {
+//           'Content-Type': 'multipart/form-data',
+//         },
+//         onUploadProgress: (progressEvent) => {
+//           const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+//           setUploadProgress(progress)
+//         }
+//       })
+
+//       if (response.data) {
+//         const encodedPath = encodeURIComponent(response.data.data.fileUrl);
+//         const downloadUrl = `/downloads/document=${encodedPath}?dbTaskId=${response.data.data.dbTaskId}&tool-type=merge-pdf`
+//         router.push(downloadUrl)
+//       } else {
+//         toast.error('No merged file received from server')
+//       }
+//     } catch (error) {
+//       console.error('Merge error:', error)
+//       toast.error(error?.response?.data?.message || 'Error merging files')
+//       alert('Failed to merge PDFs. Please try again.')
+//     } finally {
+//       setIsUploading(false)
+//     }
+//   }, [files, displayOrder, fileRotations, router])
+
+//   // Memoized ordered files
+//   const orderedFiles = useMemo(() =>
+//     displayOrder.map(index => files[index]).filter(Boolean),
+//     [displayOrder, files]
+//   )
+
+//   // Memoized total size calculation
+//   const totalSize = useMemo(() =>
+//     files.reduce((total, file) => total + Number.parseFloat(file.size), 0).toFixed(2),
+//     [files]
+//   )
+
+//   // Memoized health check status
+//   const hasUnhealthyFiles = useMemo(() =>
+//     Object.values(pdfHealthCheck).some(health => health === false),
+//     [pdfHealthCheck]
+//   )
+
+//   const SafeFileUploader = ({ whiletap, whileHover, animate, initial, ...safeProps }) => {
+//     return <FileUploader {...safeProps} />
+//   }
+
+//   // Cleanup on unmount
+//   useEffect(() => {
+//     return () => {
+//       // Clean up all object URLs
+//       Object.values(fileDataCache.current).forEach(data => {
+//         if (data.dataUrl && data.dataUrl.startsWith('blob:')) {
+//           URL.revokeObjectURL(data.dataUrl)
+//         }
+//       })
+//     }
+//   }, [])
+
+//   if (isUploading) {
+//     return <ProgressScreen uploadProgress={uploadProgress} />
+//   }
+
+//   if (files.length === 0) {
+//     return (
+//       <SafeFileUploader
+//         isMultiple={true}
+//         onFilesSelect={handleFiles}
+//         isDragOver={isDragOver}
+//         setIsDragOver={setIsDragOver}
+//         allowedTypes={[".pdf"]}
+//         showFiles={false}
+//         uploadButtonText="Select PDF files"
+//         pageTitle="Merge PDF files"
+//         pageSubTitle="Combine PDFs in the order you want with the easiest PDF merger available."
+//       />
+//     )
+//   }
+
+//   return (
+//     <div className="md:h-full">
+//       <div className="grid grid-cols-10 border h-full">
+//         {/* Main Content */}
+//         <div className="p-4 col-span-7 bg-gray-100 overflow-y-auto custom-scrollbar">
+//           <div className="flex items-center justify-between mb-6">
+//             <h2 className="text-2xl font-bold text-gray-900">Selected Files ({files.length})</h2>
+
+//             <SafeFileUploader
+//               isMultiple={true}
+//               onFilesSelect={handleFiles}
+//               isDragOver={isDragOver}
+//               setIsDragOver={setIsDragOver}
+//               allowedTypes={[".pdf"]}
+//               showFiles={true}
+//               onSort={sortFilesByName}
+//               selectedCount={files?.length}
+//               pageTitle="Merge PDF files"
+//               pageSubTitle="Combine PDFs in the order you want with the easiest PDF merger available."
+//             />
+//           </div>
+
+//           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+//             {orderedFiles.map((file, displayIndex) => (
+//               <div
+//                 key={`${file.id}-${displayIndex}`}
+//                 ref={(el) => (fileRefs.current[file.id] = el)}
+//                 draggable="true"
+//                 onDragStart={(e) => handleDragStart(e, displayIndex)}
+//                 onDragOver={(e) => handleDragOver(e, displayIndex)}
+//                 onDragLeave={handleDragLeave}
+//                 onDrop={(e) => handleDrop(e, displayIndex)}
+//                 onDragEnd={handleDragEnd}
+//               >
+//                 <PDFPreview
+//                   file={file}
+//                   rotation={fileRotations[file.id] || 0}
+//                   isLoading={loadingPdfs.has(file.id)}
+//                   onLoadSuccess={onDocumentLoadSuccess}
+//                   onLoadError={onDocumentLoadError}
+//                   onRotate={rotateFile}
+//                   onRemove={removeFile}
+//                   displayIndex={displayIndex}
+//                   isHealthy={pdfHealthCheck[file.id] !== false}
+//                   isDragging={draggedIndex === displayIndex}
+//                   isDragOver={dragOverIndex === displayIndex}
+//                 />
+//               </div>
+//             ))}
+//           </div>
+//         </div>
+
+//         {/* Sidebar */}
+//         <div className="col-span-3 overflow-y-auto border-l flex flex-col justify-between">
+//           <div className="p-6">
+//             <h3 className="text-2xl font-bold text-gray-900 mb-4 text-center">Merge PDF</h3>
+
+//             <div className="bg-blue-50 rounded-xl p-4 mb-6">
+//               <p className="text-sm text-blue-800">
+//                 Drag any file to reorder. The files will merge in the order shown. Works with 50+ files.
+//               </p>
+//             </div>
+
+//             {hasUnhealthyFiles && (
+//               <div className="bg-yellow-50 rounded-xl p-4 mb-6">
+//                 <p className="text-sm text-yellow-800">
+//                   Some files have preview issues but can still be merged. Check the yellow-highlighted files.
+//                 </p>
+//               </div>
+//             )}
+//           </div>
+
+//           <div className="p-6 border">
+//             <div className="space-y-4 mb-6">
+//               <div className="flex items-center justify-between text-sm">
+//                 <span className="text-gray-600">Files selected:</span>
+//                 <span className="font-semibold text-gray-900">{files.length}</span>
+//               </div>
+//               <div className="flex items-center justify-between text-sm">
+//                 <span className="text-gray-600">Total size:</span>
+//                 <span className="font-semibold text-gray-900">{totalSize} MB</span>
+//               </div>
+//             </div>
+
+//             <button
+//               onClick={handleMerge}
+//               disabled={files.length < 2}
+//               className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 ${files.length >= 2
+//                   ? "bg-red-600 hover:bg-red-700 hover:scale-105 shadow-lg"
+//                   : "bg-gray-300 cursor-not-allowed"
+//                 }`}
+//             >
+//               Merge PDF
+//               <ArrowRight className="w-5 h-5" />
+//             </button>
+
+//             {files.length < 2 && (
+//               <p className="text-xs text-gray-500 text-center mt-2">Select at least 2 PDF files to merge</p>
+//             )}
+//           </div>
+//         </div>
+//       </div>
+//     </div>
+//   )
+// }
